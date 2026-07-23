@@ -7,9 +7,11 @@ SIGNING_APP := $(SIGNING_DIR)/PNClip.app
 
 all: sign
 
-$(EXECUTABLE): PNClip/main.mm PNClip/Info.plist
+$(EXECUTABLE): PNClip/main.mm PNClip/Info.plist PNClip/AppIcon.icns
 	mkdir -p $(APP)/Contents/MacOS
+	mkdir -p $(APP)/Contents/Resources
 	cp PNClip/Info.plist $(APP)/Contents/Info.plist
+	cp PNClip/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
 	clang++ -std=c++17 -fobjc-arc -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework CoreImage -framework CoreMedia -framework ImageIO -framework ScreenCaptureKit -framework ServiceManagement -framework UniformTypeIdentifiers PNClip/main.mm -o $(EXECUTABLE)
 
 sign: $(EXECUTABLE)

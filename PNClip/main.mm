@@ -1418,6 +1418,12 @@ static NSMenu *CreateMainMenu(AppDelegate *delegate) {
                                                keyEquivalent:@"n"];
     newWindow.target = delegate;
     [fileMenu addItem:newWindow];
+    NSMenuItem *newWindowWithTabShortcut = [[NSMenuItem alloc]
+        initWithTitle:@"새 탭"
+               action:@selector(newWindow:)
+        keyEquivalent:@"t"];
+    newWindowWithTabShortcut.target = delegate;
+    [fileMenu addItem:newWindowWithTabShortcut];
     NSMenuItem *closeWindow = [[NSMenuItem alloc] initWithTitle:@"창 닫기"
                                                         action:@selector(closeCurrentWindow:)
                                                  keyEquivalent:@"w"];
