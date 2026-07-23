@@ -10,7 +10,7 @@ all: sign
 $(EXECUTABLE): PNClip/main.mm PNClip/Info.plist
 	mkdir -p $(APP)/Contents/MacOS
 	cp PNClip/Info.plist $(APP)/Contents/Info.plist
-	clang++ -std=c++17 -fobjc-arc -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework CoreImage -framework CoreMedia -framework ImageIO -framework ScreenCaptureKit -framework UniformTypeIdentifiers PNClip/main.mm -o $(EXECUTABLE)
+	clang++ -std=c++17 -fobjc-arc -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework CoreImage -framework CoreMedia -framework ImageIO -framework ScreenCaptureKit -framework ServiceManagement -framework UniformTypeIdentifiers PNClip/main.mm -o $(EXECUTABLE)
 
 sign: $(EXECUTABLE)
 	rm -rf $(SIGNING_DIR)

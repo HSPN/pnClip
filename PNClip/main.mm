@@ -4,6 +4,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <ServiceManagement/ServiceManagement.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 static constexpr CGFloat kBorderWidth = 4.0;
@@ -101,6 +102,7 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, CaptureRecorder *> *recorders;
 @property(nonatomic, strong) NSMutableSet<NSNumber *> *mousePassthroughWindowIDs;
 @property(nonatomic, strong) NSMenuItem *recordingMouseInputItem;
+@property(nonatomic, strong) NSMenuItem *launchAtLoginItem;
 @property(nonatomic) BOOL recordingMouseInputEnabled;
 @property(nonatomic, strong) id globalMouseMonitor;
 @property(nonatomic, strong) id localMouseMonitor;
@@ -131,6 +133,8 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 - (void)capture:(id)sender;
 - (void)toggleRecording:(id)sender;
 - (void)toggleRecordingMouseInput:(id)sender;
+- (void)toggleLaunchAtLogin:(id)sender;
+- (void)refreshLaunchAtLoginState;
 - (void)transparencyChanged:(NSSlider *)sender;
 - (void)saveCapturedImage:(CGImageRef)image;
 - (void)showAlertWithTitle:(NSString *)title message:(NSString *)message window:(NSWindow *)window;
@@ -608,6 +612,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     self.recorders = [NSMutableDictionary dictionary];
     self.mousePassthroughWindowIDs = [NSMutableSet set];
     self.recordingMouseInputEnabled = NO;
+    [self refreshLaunchAtLoginState];
     [self restoreSaveDirectory];
 
     NSEventMask mouseMask = NSEventMaskMouseMoved |
@@ -649,6 +654,30 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
     [self newWindow:nil];
     [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)refreshLaunchAtLoginState {
+    self.launchAtLoginItem.state = SMAppService.mainAppService.status == SMAppServiceStatusEnabled
+        ? NSControlStateValueOn
+        : NSControlStateValueOff;
+}
+
+- (void)toggleLaunchAtLogin:(id)sender {
+    (void)sender;
+    SMAppService *service = SMAppService.mainAppService;
+    NSError *error = nil;
+    BOOL succeeded = service.status == SMAppServiceStatusEnabled
+        ? [service unregisterAndReturnError:&error]
+        : [service registerAndReturnError:&error];
+    [self refreshLaunchAtLoginState];
+
+    if (!succeeded) {
+        [self showAlertWithTitle:@"자동 실행 설정 실패"
+                         message:error.localizedDescription
+                          window:self.selectedWindow];
+    } else if (service.status == SMAppServiceStatusRequiresApproval) {
+        [SMAppService openSystemSettingsLoginItems];
+    }
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
@@ -1219,6 +1248,14 @@ static NSMenu *CreateMainMenu(AppDelegate *delegate) {
     NSMenuItem *appMenuItem = [[NSMenuItem alloc] init];
     [mainMenu addItem:appMenuItem];
     NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"PNClip"];
+    NSMenuItem *launchAtLogin = [[NSMenuItem alloc]
+        initWithTitle:@"로그인 시 실행"
+               action:@selector(toggleLaunchAtLogin:)
+        keyEquivalent:@""];
+    launchAtLogin.target = delegate;
+    delegate.launchAtLoginItem = launchAtLogin;
+    [appMenu addItem:launchAtLogin];
+    [appMenu addItem:NSMenuItem.separatorItem];
     [appMenu addItemWithTitle:@"PNClip 종료"
                        action:@selector(terminate:)
                 keyEquivalent:@"q"];
