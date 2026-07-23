@@ -11,6 +11,7 @@ static constexpr CGFloat kBorderWidth = 4.0;
 static constexpr CGFloat kResizeHitWidth = 9.0;
 static constexpr NSInteger kRecordingFramesPerSecond = 24;
 static constexpr NSTimeInterval kMaximumRecordingDuration = 10.0;
+static constexpr NSTimeInterval kCaptureFlashDuration = 0.2;
 static NSString *const kSaveFolderBookmarkKey = @"SaveFolderBookmark";
 static NSString *const kErrorDomain = @"PNClip";
 
@@ -66,6 +67,8 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 
 @interface CaptureView : NSView
 @property(nonatomic) CGFloat interiorTransparency;
+@property(nonatomic, getter=isRecordingActive) BOOL recordingActive;
+@property(nonatomic, getter=isCaptureFlashActive) BOOL captureFlashActive;
 @end
 
 @interface CaptureWindow : NSWindow
@@ -133,6 +136,8 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 - (BOOL)installRecordingShortcutTapForWindow:(NSWindow *)window;
 - (void)removeRecordingShortcutTap;
 - (void)stopGlobalRecording;
+- (void)setRecordingAppearance:(BOOL)recording forWindow:(NSWindow *)window;
+- (void)flashCaptureBorderForWindow:(NSWindow *)window;
 - (void)dismissSelectionWindow;
 - (void)updateMousePassthrough;
 - (NSRect)componentFrameAtScreenPoint:(NSPoint)screenPoint;
@@ -177,7 +182,12 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     ResizeEdge _resizeEdge;
     NSPoint _resizeStartPoint;
     NSRect _resizeStartFrame;
+    BOOL _recordingActive;
+    BOOL _captureFlashActive;
 }
+
+@synthesize recordingActive = _recordingActive;
+@synthesize captureFlashActive = _captureFlashActive;
 
 - (instancetype)initWithFrame:(NSRect)frameRect {
     self = [super initWithFrame:frameRect];
@@ -202,8 +212,23 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     NSRect borderRect = NSInsetRect(self.bounds, kBorderWidth / 2.0, kBorderWidth / 2.0);
     NSBezierPath *border = [NSBezierPath bezierPathWithRect:borderRect];
     border.lineWidth = kBorderWidth;
-    [[NSColor colorWithCalibratedRed:0.16 green:0.64 blue:1.0 alpha:1.0] setStroke];
+    NSColor *borderColor = (self.isRecordingActive || self.isCaptureFlashActive)
+        ? [NSColor colorWithCalibratedRed:1.0 green:0.48 blue:0.08 alpha:1.0]
+        : [NSColor colorWithCalibratedRed:0.16 green:0.64 blue:1.0 alpha:1.0];
+    [borderColor setStroke];
     [border stroke];
+}
+
+- (void)setRecordingActive:(BOOL)recordingActive {
+    if (_recordingActive == recordingActive) return;
+    _recordingActive = recordingActive;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setCaptureFlashActive:(BOOL)captureFlashActive {
+    if (_captureFlashActive == captureFlashActive) return;
+    _captureFlashActive = captureFlashActive;
+    [self setNeedsDisplay:YES];
 }
 
 - (BOOL)acceptsFirstMouse:(NSEvent *)event {
@@ -861,6 +886,28 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     [recorder stop];
 }
 
+- (void)setRecordingAppearance:(BOOL)recording forWindow:(NSWindow *)window {
+    CaptureView *view = [window.contentView isKindOfClass:CaptureView.class]
+        ? (CaptureView *)window.contentView
+        : nil;
+    view.recordingActive = recording;
+}
+
+- (void)flashCaptureBorderForWindow:(NSWindow *)window {
+    CaptureView *view = [window.contentView isKindOfClass:CaptureView.class]
+        ? (CaptureView *)window.contentView
+        : nil;
+    if (!view) return;
+
+    view.captureFlashActive = YES;
+    __weak CaptureView *weakView = view;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(kCaptureFlashDuration * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        weakView.captureFlashActive = NO;
+    });
+}
+
 - (void)dismissSelectionWindow {
     [self.selectionWindow orderOut:nil];
     self.selectionWindow = nil;
@@ -1170,6 +1217,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 - (void)capture:(id)sender {
     NSWindow *targetWindow = [self activeCaptureWindow];
     if (!targetWindow || ![self ensureScreenCaptureAccessForWindow:targetWindow]) return;
+    [self flashCaptureBorderForWindow:targetWindow];
 
     NSRect contentRect = [targetWindow contentRectForFrameRect:targetWindow.frame];
     NSRect captureRect = NSInsetRect(contentRect, kBorderWidth, kBorderWidth);
@@ -1244,6 +1292,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         [self.mousePassthroughWindowIDs addObject:windowKey];
         [self updateMousePassthrough];
     }
+    [self setRecordingAppearance:YES forWindow:targetWindow];
     __weak AppDelegate *weakSelf = self;
     __weak NSWindow *weakWindow = targetWindow;
 
@@ -1254,6 +1303,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
             dispatch_async(dispatch_get_main_queue(), ^{
                 [strongSelf.recorders removeObjectForKey:windowKey];
                 [strongSelf stopMousePassthroughForWindow:weakWindow key:windowKey];
+                [strongSelf setRecordingAppearance:NO forWindow:weakWindow];
                 [strongSelf showAlertWithTitle:@"녹화 실패"
                                        message:error.localizedDescription ? error.localizedDescription : @"녹화할 디스플레이를 찾을 수 없습니다."
                                         window:weakWindow];
@@ -1275,6 +1325,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                       stopHandler:^{
             AppDelegate *stopSelf = weakSelf;
             [stopSelf stopMousePassthroughForWindow:weakWindow key:windowKey];
+            [stopSelf setRecordingAppearance:NO forWindow:weakWindow];
         }
                        completion:^(NSURL *fileURL, NSError *recordingError) {
             AppDelegate *completionSelf = weakSelf;
