@@ -79,6 +79,7 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 
 @interface SelectionView : NSView
 @property(nonatomic, copy) void (^completion)(NSRect screenRect);
+@property(nonatomic, copy) void (^componentCompletion)(NSRect componentScreenRect);
 @property(nonatomic, copy) void (^cancellation)(void);
 @property(nonatomic, copy) NSRect (^componentFrameProvider)(NSPoint screenPoint);
 @end
@@ -428,8 +429,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     _dragging = NO;
     NSRect selection = RectBetweenPoints(_dragStart, _dragCurrent);
     if (NSWidth(selection) < 20.0 || NSHeight(selection) < 20.0) {
-        if (!NSIsEmptyRect(_highlightedScreenRect) && self.completion) {
-            self.completion(_highlightedScreenRect);
+        if (!NSIsEmptyRect(_highlightedScreenRect) && self.componentCompletion) {
+            self.componentCompletion(_highlightedScreenRect);
         } else if (self.cancellation) {
             self.cancellation();
         }
@@ -1192,6 +1193,12 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         AppDelegate *strongSelf = weakSelf;
         [strongSelf dismissSelectionWindow];
         [strongSelf createWindowWithFrame:selectedFrame];
+    };
+    selectionView.componentCompletion = ^(NSRect componentFrame) {
+        AppDelegate *strongSelf = weakSelf;
+        [strongSelf dismissSelectionWindow];
+        NSRect windowFrame = NSInsetRect(componentFrame, -kBorderWidth, -kBorderWidth);
+        [strongSelf createWindowWithFrame:windowFrame];
     };
     selectionView.cancellation = ^{
         [weakSelf dismissSelectionWindow];
