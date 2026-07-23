@@ -8,7 +8,10 @@
 
 static constexpr CGFloat kBorderWidth = 4.0;
 static constexpr CGFloat kResizeHitWidth = 9.0;
+static constexpr NSInteger kRecordingFramesPerSecond = 24;
+static constexpr NSTimeInterval kMaximumRecordingDuration = 10.0;
 static NSString *const kSaveFolderBookmarkKey = @"SaveFolderBookmark";
+static NSString *const kErrorDomain = @"PNClip";
 
 typedef NS_OPTIONS(NSUInteger, ResizeEdge) {
     ResizeEdgeNone   = 0,
@@ -23,6 +26,15 @@ static NSRect RectBetweenPoints(NSPoint first, NSPoint second) {
                       MIN(first.y, second.y),
                       fabs(second.x - first.x),
                       fabs(second.y - first.y));
+}
+
+static NSURL *TimestampedFileURL(NSURL *folder, NSString *prefix, NSString *extension) {
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.dateFormat = @"yyyy-MM-dd 'at' HH.mm.ss";
+    NSString *filename = [NSString stringWithFormat:@"%@ %@.%@",
+                          prefix, [formatter stringFromDate:NSDate.date], extension];
+    return [folder URLByAppendingPathComponent:filename];
 }
 
 static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
@@ -105,12 +117,22 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 - (void)openMostRecentCapture:(id)sender;
 - (void)openSaveDirectory:(id)sender;
 - (void)copyGIFAtURLToPasteboard:(NSURL *)fileURL;
+- (NSWindow *)activeCaptureWindow;
+- (BOOL)ensureScreenCaptureAccessForWindow:(NSWindow *)window;
+- (void)loadContentFilterForScreen:(NSScreen *)screen
+                        completion:(void (^)(SCContentFilter *filter, NSError *error))completion;
+- (SCStreamConfiguration *)configurationForRect:(NSRect)rect
+                                        onScreen:(NSScreen *)screen
+                                  usesNativeScale:(BOOL)usesNativeScale;
+- (void)stopMousePassthroughForWindow:(NSWindow *)window key:(NSNumber *)windowKey;
+- (void)dismissSelectionWindow;
 - (void)updateMousePassthrough;
 - (NSRect)componentFrameAtScreenPoint:(NSPoint)screenPoint;
 - (void)capture:(id)sender;
 - (void)toggleRecording:(id)sender;
 - (void)toggleRecordingMouseInput:(id)sender;
 - (void)transparencyChanged:(NSSlider *)sender;
+- (void)saveCapturedImage:(CGImageRef)image;
 - (void)showAlertWithTitle:(NSString *)title message:(NSString *)message window:(NSWindow *)window;
 @end
 
@@ -440,7 +462,8 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
             return;
         }
 
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)(kMaximumRecordingDuration * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             [weakSelf stop];
         });
@@ -498,28 +521,26 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
 - (void)encodeGIF {
     if (_frames.count == 0) {
-        NSError *error = [NSError errorWithDomain:@"PNClip"
+        NSError *error = [NSError errorWithDomain:kErrorDomain
                                              code:1
                                          userInfo:@{NSLocalizedDescriptionKey: @"녹화된 프레임이 없습니다."}];
         [self finishWithURL:nil error:error];
         return;
     }
 
-    NSURL *destinationFolder = _destinationFolder ?: [NSFileManager.defaultManager
-        URLsForDirectory:NSDesktopDirectory inDomains:NSUserDomainMask].firstObject;
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-    formatter.dateFormat = @"yyyy-MM-dd 'at' HH.mm.ss";
-    NSString *name = [NSString stringWithFormat:@"PNClip Recording %@.gif",
-                      [formatter stringFromDate:NSDate.date]];
-    NSURL *destination = [destinationFolder URLByAppendingPathComponent:name];
+    NSURL *destinationFolder = _destinationFolder;
+    if (!destinationFolder) {
+        destinationFolder = [NSFileManager.defaultManager
+            URLsForDirectory:NSDesktopDirectory inDomains:NSUserDomainMask].firstObject;
+    }
+    NSURL *destination = TimestampedFileURL(destinationFolder, @"PNClip Recording", @"gif");
 
     CGImageDestinationRef gif = CGImageDestinationCreateWithURL((__bridge CFURLRef)destination,
                                                                 (__bridge CFStringRef)UTTypeGIF.identifier,
                                                                 _frames.count,
                                                                 nullptr);
     if (!gif) {
-        NSError *error = [NSError errorWithDomain:@"PNClip"
+        NSError *error = [NSError errorWithDomain:kErrorDomain
                                              code:2
                                          userInfo:@{NSLocalizedDescriptionKey: @"GIF 파일을 만들 수 없습니다."}];
         [self finishWithURL:nil error:error];
@@ -552,7 +573,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     BOOL succeeded = CGImageDestinationFinalize(gif);
     CFRelease(gif);
     if (!succeeded) {
-        NSError *error = [NSError errorWithDomain:@"PNClip"
+        NSError *error = [NSError errorWithDomain:kErrorDomain
                                              code:3
                                          userInfo:@{NSLocalizedDescriptionKey: @"GIF 저장에 실패했습니다."}];
         [self finishWithURL:nil error:error];
@@ -599,6 +620,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     __weak AppDelegate *weakSelf = self;
     self.globalMouseMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:mouseMask
                                                                     handler:^(NSEvent *event) {
+        (void)event;
         dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf updateMousePassthrough]; });
     }];
     self.localMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:mouseMask
@@ -609,6 +631,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     self.mouseTrackingTimer = [NSTimer scheduledTimerWithTimeInterval:0.05
                                                               repeats:YES
                                                                 block:^(NSTimer *timer) {
+        (void)timer;
         if (weakSelf.mousePassthroughWindowIDs.count > 0) {
             [weakSelf updateMousePassthrough];
         }
@@ -635,6 +658,90 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     if (self.accessingSecurityScopedDirectory) {
         [self.saveDirectoryURL stopAccessingSecurityScopedResource];
     }
+}
+
+- (NSWindow *)activeCaptureWindow {
+    NSWindow *window = self.selectedWindow ? self.selectedWindow : NSApp.keyWindow;
+    return [window.contentView isKindOfClass:CaptureView.class] ? window : nil;
+}
+
+- (BOOL)ensureScreenCaptureAccessForWindow:(NSWindow *)window {
+    if (CGPreflightScreenCaptureAccess()) return YES;
+
+    CGRequestScreenCaptureAccess();
+    [self showAlertWithTitle:@"화면 기록 권한 필요"
+                     message:@"시스템 설정에서 PNClip의 화면 기록을 허용한 뒤 앱을 다시 실행해 주세요."
+                      window:window];
+    return NO;
+}
+
+- (void)loadContentFilterForScreen:(NSScreen *)screen
+                        completion:(void (^)(SCContentFilter *, NSError *))completion {
+    CGDirectDisplayID displayID = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
+    NSMutableSet<NSNumber *> *ownWindowIDs = [NSMutableSet setWithCapacity:self.windows.count];
+    for (NSWindow *window in self.windows) {
+        [ownWindowIDs addObject:@((CGWindowID)window.windowNumber)];
+    }
+
+    [SCShareableContent getShareableContentExcludingDesktopWindows:NO
+                                                onScreenWindowsOnly:YES
+                                                 completionHandler:^(SCShareableContent *content, NSError *error) {
+        if (error) {
+            completion(nil, error);
+            return;
+        }
+
+        SCDisplay *display = nil;
+        for (SCDisplay *candidate in content.displays) {
+            if (candidate.displayID == displayID) {
+                display = candidate;
+                break;
+            }
+        }
+        if (!display) {
+            NSError *displayError = [NSError errorWithDomain:kErrorDomain
+                                                        code:4
+                                                    userInfo:@{
+                NSLocalizedDescriptionKey: @"캡처할 디스플레이를 찾을 수 없습니다."
+            }];
+            completion(nil, displayError);
+            return;
+        }
+
+        NSMutableArray<SCWindow *> *excludedWindows = [NSMutableArray array];
+        for (SCWindow *candidate in content.windows) {
+            if ([ownWindowIDs containsObject:@(candidate.windowID)]) {
+                [excludedWindows addObject:candidate];
+            }
+        }
+        completion([[SCContentFilter alloc] initWithDisplay:display
+                                           excludingWindows:excludedWindows], nil);
+    }];
+}
+
+- (SCStreamConfiguration *)configurationForRect:(NSRect)rect
+                                        onScreen:(NSScreen *)screen
+                                  usesNativeScale:(BOOL)usesNativeScale {
+    SCStreamConfiguration *configuration = [[SCStreamConfiguration alloc] init];
+    configuration.sourceRect = CGRectMake(NSMinX(rect) - NSMinX(screen.frame),
+                                           NSMaxY(screen.frame) - NSMaxY(rect),
+                                           NSWidth(rect),
+                                           NSHeight(rect));
+    CGFloat scale = usesNativeScale ? screen.backingScaleFactor : 1.0;
+    configuration.width = (size_t)round(NSWidth(rect) * scale);
+    configuration.height = (size_t)round(NSHeight(rect) * scale);
+    configuration.showsCursor = NO;
+    return configuration;
+}
+
+- (void)stopMousePassthroughForWindow:(NSWindow *)window key:(NSNumber *)windowKey {
+    [self.mousePassthroughWindowIDs removeObject:windowKey];
+    window.ignoresMouseEvents = NO;
+}
+
+- (void)dismissSelectionWindow {
+    [self.selectionWindow orderOut:nil];
+    self.selectionWindow = nil;
 }
 
 - (void)updateMousePassthrough {
@@ -888,14 +995,11 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     __weak AppDelegate *weakSelf = self;
     selectionView.completion = ^(NSRect selectedFrame) {
         AppDelegate *strongSelf = weakSelf;
-        [strongSelf.selectionWindow orderOut:nil];
-        strongSelf.selectionWindow = nil;
+        [strongSelf dismissSelectionWindow];
         [strongSelf createWindowWithFrame:selectedFrame];
     };
     selectionView.cancellation = ^{
-        AppDelegate *strongSelf = weakSelf;
-        [strongSelf.selectionWindow orderOut:nil];
-        strongSelf.selectionWindow = nil;
+        [weakSelf dismissSelectionWindow];
     };
     selectionView.componentFrameProvider = ^NSRect(NSPoint screenPoint) {
         return [weakSelf componentFrameAtScreenPoint:screenPoint];
@@ -914,7 +1018,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     if (self.windows.count == 0) {
         [self newWindow:nil];
     } else if (!flag) {
-        NSWindow *window = self.selectedWindow ?: self.windows.lastObject;
+        NSWindow *window = self.selectedWindow ? self.selectedWindow : self.windows.lastObject;
         [window makeKeyAndOrderFront:nil];
     }
     return YES;
@@ -942,67 +1046,29 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 }
 
 - (void)capture:(id)sender {
-    NSWindow *targetWindow = self.selectedWindow ?: NSApp.keyWindow;
-    if (!targetWindow || ![targetWindow.contentView isKindOfClass:CaptureView.class]) return;
-
-    if (!CGPreflightScreenCaptureAccess()) {
-        CGRequestScreenCaptureAccess();
-        [self showAlertWithTitle:@"화면 기록 권한 필요"
-                         message:@"시스템 설정에서 PNClip의 화면 기록을 허용한 뒤 앱을 다시 실행해 주세요."
-                          window:targetWindow];
-        return;
-    }
+    NSWindow *targetWindow = [self activeCaptureWindow];
+    if (!targetWindow || ![self ensureScreenCaptureAccessForWindow:targetWindow]) return;
 
     NSRect contentRect = [targetWindow contentRectForFrameRect:targetWindow.frame];
     NSRect captureRect = NSInsetRect(contentRect, kBorderWidth, kBorderWidth);
-    NSScreen *screen = targetWindow.screen ?: NSScreen.mainScreen;
-    CGDirectDisplayID displayID = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
-    NSMutableSet<NSNumber *> *windowIDs = [NSMutableSet set];
-    for (NSWindow *window in self.windows) {
-        [windowIDs addObject:@((CGWindowID)window.windowNumber)];
-    }
+    NSScreen *screen = targetWindow.screen ? targetWindow.screen : NSScreen.mainScreen;
     __weak AppDelegate *weakSelf = self;
 
-    [SCShareableContent getShareableContentExcludingDesktopWindows:NO
-                                                onScreenWindowsOnly:YES
-                                                 completionHandler:^(SCShareableContent *content, NSError *error) {
+    [self loadContentFilterForScreen:screen completion:^(SCContentFilter *filter, NSError *error) {
         AppDelegate *strongSelf = weakSelf;
         if (!strongSelf) return;
-
-        SCDisplay *display = nil;
-        for (SCDisplay *candidate in content.displays) {
-            if (candidate.displayID == displayID) {
-                display = candidate;
-                break;
-            }
-        }
-
-        NSMutableArray<SCWindow *> *ownWindows = [NSMutableArray array];
-        for (SCWindow *candidate in content.windows) {
-            if ([windowIDs containsObject:@(candidate.windowID)]) {
-                [ownWindows addObject:candidate];
-            }
-        }
-
-        if (error || !display) {
+        if (error || !filter) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [strongSelf showAlertWithTitle:@"캡처 실패"
-                                       message:error.localizedDescription ?: @"화면 기록 권한을 확인해 주세요."
+                                       message:error.localizedDescription ? error.localizedDescription : @"화면 기록 권한을 확인해 주세요."
                                         window:targetWindow];
             });
             return;
         }
 
-        SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display
-                                                         excludingWindows:ownWindows];
-        SCStreamConfiguration *configuration = [[SCStreamConfiguration alloc] init];
-        configuration.sourceRect = CGRectMake(NSMinX(captureRect) - NSMinX(screen.frame),
-                                               NSMaxY(screen.frame) - NSMaxY(captureRect),
-                                               NSWidth(captureRect),
-                                               NSHeight(captureRect));
-        configuration.width = (size_t)round(NSWidth(captureRect) * screen.backingScaleFactor);
-        configuration.height = (size_t)round(NSHeight(captureRect) * screen.backingScaleFactor);
-        configuration.showsCursor = NO;
+        SCStreamConfiguration *configuration = [strongSelf configurationForRect:captureRect
+                                                                         onScreen:screen
+                                                                   usesNativeScale:YES];
 
         [SCScreenshotManager captureImageWithFilter:filter
                                       configuration:configuration
@@ -1010,7 +1076,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
             if (captureError || image == nullptr) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [strongSelf showAlertWithTitle:@"캡처 실패"
-                                           message:captureError.localizedDescription ?: @"이미지를 만들 수 없습니다."
+                                           message:captureError.localizedDescription ? captureError.localizedDescription : @"이미지를 만들 수 없습니다."
                                             window:targetWindow];
                 });
                 return;
@@ -1018,7 +1084,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
             CGImageRef retainedImage = CGImageRetain(image);
             dispatch_async(dispatch_get_main_queue(), ^{
-                [strongSelf saveImageToDesktop:retainedImage];
+                [strongSelf saveCapturedImage:retainedImage];
                 CGImageRelease(retainedImage);
             });
         }];
@@ -1026,34 +1092,22 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 }
 
 - (void)toggleRecording:(id)sender {
-    NSWindow *targetWindow = self.selectedWindow ?: NSApp.keyWindow;
-    if (!targetWindow || ![targetWindow.contentView isKindOfClass:CaptureView.class]) return;
+    NSWindow *targetWindow = [self activeCaptureWindow];
+    if (!targetWindow) return;
 
     NSNumber *windowKey = @((CGWindowID)targetWindow.windowNumber);
     CaptureRecorder *existingRecorder = self.recorders[windowKey];
     if (existingRecorder) {
-        [self.mousePassthroughWindowIDs removeObject:windowKey];
-        targetWindow.ignoresMouseEvents = NO;
+        [self stopMousePassthroughForWindow:targetWindow key:windowKey];
         [existingRecorder stop];
         return;
     }
 
-    if (!CGPreflightScreenCaptureAccess()) {
-        CGRequestScreenCaptureAccess();
-        [self showAlertWithTitle:@"화면 기록 권한 필요"
-                         message:@"시스템 설정에서 PNClip의 화면 기록을 허용한 뒤 앱을 다시 실행해 주세요."
-                          window:targetWindow];
-        return;
-    }
+    if (![self ensureScreenCaptureAccessForWindow:targetWindow]) return;
 
     NSRect contentRect = [targetWindow contentRectForFrameRect:targetWindow.frame];
     NSRect recordingRect = NSInsetRect(contentRect, kBorderWidth, kBorderWidth);
-    NSScreen *screen = targetWindow.screen ?: NSScreen.mainScreen;
-    CGDirectDisplayID displayID = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
-    NSMutableSet<NSNumber *> *windowIDs = [NSMutableSet set];
-    for (NSWindow *window in self.windows) {
-        [windowIDs addObject:@((CGWindowID)window.windowNumber)];
-    }
+    NSScreen *screen = targetWindow.screen ? targetWindow.screen : NSScreen.mainScreen;
 
     CaptureRecorder *recorder = [[CaptureRecorder alloc]
         initWithWindowID:windowKey.unsignedIntValue
@@ -1066,48 +1120,24 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     __weak AppDelegate *weakSelf = self;
     __weak NSWindow *weakWindow = targetWindow;
 
-    [SCShareableContent getShareableContentExcludingDesktopWindows:NO
-                                                onScreenWindowsOnly:YES
-                                                 completionHandler:^(SCShareableContent *content, NSError *error) {
+    [self loadContentFilterForScreen:screen completion:^(SCContentFilter *filter, NSError *error) {
         AppDelegate *strongSelf = weakSelf;
         if (!strongSelf) return;
-
-        SCDisplay *display = nil;
-        for (SCDisplay *candidate in content.displays) {
-            if (candidate.displayID == displayID) {
-                display = candidate;
-                break;
-            }
-        }
-        NSMutableArray<SCWindow *> *ownWindows = [NSMutableArray array];
-        for (SCWindow *candidate in content.windows) {
-            if ([windowIDs containsObject:@(candidate.windowID)]) {
-                [ownWindows addObject:candidate];
-            }
-        }
-
-        if (error || !display) {
+        if (error || !filter) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [strongSelf.recorders removeObjectForKey:windowKey];
-                [strongSelf.mousePassthroughWindowIDs removeObject:windowKey];
-                weakWindow.ignoresMouseEvents = NO;
+                [strongSelf stopMousePassthroughForWindow:weakWindow key:windowKey];
                 [strongSelf showAlertWithTitle:@"녹화 실패"
-                                       message:error.localizedDescription ?: @"녹화할 디스플레이를 찾을 수 없습니다."
+                                       message:error.localizedDescription ? error.localizedDescription : @"녹화할 디스플레이를 찾을 수 없습니다."
                                         window:weakWindow];
             });
             return;
         }
 
-        SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display
-                                                         excludingWindows:ownWindows];
-        SCStreamConfiguration *configuration = [[SCStreamConfiguration alloc] init];
-        configuration.sourceRect = CGRectMake(NSMinX(recordingRect) - NSMinX(screen.frame),
-                                               NSMaxY(screen.frame) - NSMaxY(recordingRect),
-                                               NSWidth(recordingRect),
-                                               NSHeight(recordingRect));
-        configuration.width = (size_t)round(NSWidth(recordingRect));
-        configuration.height = (size_t)round(NSHeight(recordingRect));
-        configuration.minimumFrameInterval = CMTimeMake(1, 24);
+        SCStreamConfiguration *configuration = [strongSelf configurationForRect:recordingRect
+                                                                         onScreen:screen
+                                                                   usesNativeScale:NO];
+        configuration.minimumFrameInterval = CMTimeMake(1, (int32_t)kRecordingFramesPerSecond);
         configuration.queueDepth = 8;
         configuration.pixelFormat = kCVPixelFormatType_32BGRA;
         configuration.showsCursor = NO;
@@ -1117,8 +1147,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                     configuration:configuration
                       stopHandler:^{
             AppDelegate *stopSelf = weakSelf;
-            [stopSelf.mousePassthroughWindowIDs removeObject:windowKey];
-            weakWindow.ignoresMouseEvents = NO;
+            [stopSelf stopMousePassthroughForWindow:weakWindow key:windowKey];
         }
                        completion:^(NSURL *fileURL, NSError *recordingError) {
             AppDelegate *completionSelf = weakSelf;
@@ -1146,14 +1175,10 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     [view setNeedsDisplay:YES];
 }
 
-- (void)saveImageToDesktop:(CGImageRef)image {
+- (void)saveCapturedImage:(CGImageRef)image {
     NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithCGImage:image];
     NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-    formatter.dateFormat = @"yyyy-MM-dd 'at' HH.mm.ss";
-    NSString *name = [NSString stringWithFormat:@"PNClip %@.png", [formatter stringFromDate:NSDate.date]];
-    NSURL *destination = [self.saveDirectoryURL URLByAppendingPathComponent:name];
+    NSURL *destination = TimestampedFileURL(self.saveDirectoryURL, @"PNClip", @"png");
     NSError *error = nil;
     if (![png writeToURL:destination options:NSDataWritingAtomic error:&error]) {
         NSBeep();
@@ -1177,7 +1202,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 - (void)showAlertWithTitle:(NSString *)title message:(NSString *)message window:(NSWindow *)window {
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = title;
-    alert.informativeText = message ?: @"알 수 없는 오류가 발생했습니다.";
+    alert.informativeText = message ? message : @"알 수 없는 오류가 발생했습니다.";
     if (window) {
         [alert beginSheetModalForWindow:window completionHandler:nil];
     } else {
@@ -1290,7 +1315,7 @@ static NSMenu *CreateMainMenu(AppDelegate *delegate) {
     return mainMenu;
 }
 
-int main(int argc, const char *argv[]) {
+int main(void) {
     @autoreleasepool {
         NSApplication *application = NSApplication.sharedApplication;
         AppDelegate *delegate = [[AppDelegate alloc] init];
