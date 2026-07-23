@@ -101,6 +101,9 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 @property(nonatomic, strong) SelectionWindow *selectionWindow;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, CaptureRecorder *> *recorders;
 @property(nonatomic, strong) NSMutableSet<NSNumber *> *mousePassthroughWindowIDs;
+@property(nonatomic, strong) NSNumber *globalRecordingWindowKey;
+@property(nonatomic) CFMachPortRef recordingShortcutTap;
+@property(nonatomic) CFRunLoopSourceRef recordingShortcutSource;
 @property(nonatomic, strong) NSMenuItem *recordingMouseInputItem;
 @property(nonatomic, strong) NSMenuItem *launchAtLoginItem;
 @property(nonatomic) BOOL recordingMouseInputEnabled;
@@ -127,6 +130,9 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
                                         onScreen:(NSScreen *)screen
                                   usesNativeScale:(BOOL)usesNativeScale;
 - (void)stopMousePassthroughForWindow:(NSWindow *)window key:(NSNumber *)windowKey;
+- (BOOL)installRecordingShortcutTapForWindow:(NSWindow *)window;
+- (void)removeRecordingShortcutTap;
+- (void)stopGlobalRecording;
 - (void)dismissSelectionWindow;
 - (void)updateMousePassthrough;
 - (NSRect)componentFrameAtScreenPoint:(NSPoint)screenPoint;
@@ -139,6 +145,32 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 - (void)saveCapturedImage:(CGImageRef)image;
 - (void)showAlertWithTitle:(NSString *)title message:(NSString *)message window:(NSWindow *)window;
 @end
+
+static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
+                                            CGEventType type,
+                                            CGEventRef event,
+                                            void *userInfo) {
+    (void)proxy;
+    AppDelegate *delegate = (__bridge AppDelegate *)userInfo;
+    if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
+        if (delegate.recordingShortcutTap) {
+            CGEventTapEnable(delegate.recordingShortcutTap, true);
+        }
+        return event;
+    }
+    if (type != kCGEventKeyDown || !delegate.globalRecordingWindowKey) return event;
+
+    CGEventFlags flags = CGEventGetFlags(event);
+    CGKeyCode keyCode = (CGKeyCode)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
+    BOOL isCommandR = keyCode == 15 && (flags & kCGEventFlagMaskCommand) != 0 &&
+                      (flags & (kCGEventFlagMaskControl | kCGEventFlagMaskAlternate)) == 0;
+    if (!isCommandR) return event;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [delegate stopGlobalRecording];
+    });
+    return nullptr;
+}
 
 @implementation CaptureView
 {
@@ -684,6 +716,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     if (self.globalMouseMonitor) [NSEvent removeMonitor:self.globalMouseMonitor];
     if (self.localMouseMonitor) [NSEvent removeMonitor:self.localMouseMonitor];
     [self.mouseTrackingTimer invalidate];
+    [self removeRecordingShortcutTap];
     if (self.accessingSecurityScopedDirectory) {
         [self.saveDirectoryURL stopAccessingSecurityScopedResource];
     }
@@ -766,6 +799,66 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 - (void)stopMousePassthroughForWindow:(NSWindow *)window key:(NSNumber *)windowKey {
     [self.mousePassthroughWindowIDs removeObject:windowKey];
     window.ignoresMouseEvents = NO;
+    if ([self.globalRecordingWindowKey isEqualToNumber:windowKey]) {
+        self.globalRecordingWindowKey = nil;
+        [self removeRecordingShortcutTap];
+    }
+}
+
+- (BOOL)installRecordingShortcutTapForWindow:(NSWindow *)window {
+    if (self.recordingShortcutTap) return YES;
+
+    NSDictionary *options = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
+    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    CGEventMask mask = CGEventMaskBit(kCGEventKeyDown);
+    self.recordingShortcutTap = CGEventTapCreate(kCGSessionEventTap,
+                                                  kCGHeadInsertEventTap,
+                                                  kCGEventTapOptionDefault,
+                                                  mask,
+                                                  RecordingShortcutCallback,
+                                                  (__bridge void *)self);
+    if (!self.recordingShortcutTap) {
+        [self showAlertWithTitle:@"접근성 권한 필요"
+                         message:@"다른 앱을 사용하는 동안 Command-R로 녹화를 중지하려면 시스템 설정에서 PNClip의 접근성 권한을 허용해 주세요."
+                          window:window];
+        return NO;
+    }
+
+    self.recordingShortcutSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault,
+                                                                  self.recordingShortcutTap,
+                                                                  0);
+    CFRunLoopAddSource(CFRunLoopGetMain(), self.recordingShortcutSource, kCFRunLoopCommonModes);
+    CGEventTapEnable(self.recordingShortcutTap, true);
+    return YES;
+}
+
+- (void)removeRecordingShortcutTap {
+    if (self.recordingShortcutSource) {
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), self.recordingShortcutSource, kCFRunLoopCommonModes);
+        CFRelease(self.recordingShortcutSource);
+        self.recordingShortcutSource = nullptr;
+    }
+    if (self.recordingShortcutTap) {
+        CFMachPortInvalidate(self.recordingShortcutTap);
+        CFRelease(self.recordingShortcutTap);
+        self.recordingShortcutTap = nullptr;
+    }
+}
+
+- (void)stopGlobalRecording {
+    NSNumber *windowKey = self.globalRecordingWindowKey;
+    CaptureRecorder *recorder = self.recorders[windowKey];
+    if (!windowKey || !recorder) return;
+
+    NSWindow *recordingWindow = nil;
+    for (NSWindow *window in self.windows) {
+        if ((CGWindowID)window.windowNumber == windowKey.unsignedIntValue) {
+            recordingWindow = window;
+            break;
+        }
+    }
+    [self stopMousePassthroughForWindow:recordingWindow key:windowKey];
+    [recorder stop];
 }
 
 - (void)dismissSelectionWindow {
@@ -1061,9 +1154,9 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
-    NSNumber *windowKey = @((CGWindowID)((NSWindow *)notification.object).windowNumber);
-    ((NSWindow *)notification.object).ignoresMouseEvents = NO;
-    [self.mousePassthroughWindowIDs removeObject:windowKey];
+    NSWindow *window = notification.object;
+    NSNumber *windowKey = @((CGWindowID)window.windowNumber);
+    [self stopMousePassthroughForWindow:window key:windowKey];
     [self.recorders[windowKey] stop];
     if (self.selectedWindow == notification.object) {
         self.selectedWindow = nil;
@@ -1143,6 +1236,11 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
        destinationFolder:self.saveDirectoryURL];
     self.recorders[windowKey] = recorder;
     if (self.recordingMouseInputEnabled) {
+        if (![self installRecordingShortcutTapForWindow:targetWindow]) {
+            [self.recorders removeObjectForKey:windowKey];
+            return;
+        }
+        self.globalRecordingWindowKey = windowKey;
         [self.mousePassthroughWindowIDs addObject:windowKey];
         [self updateMousePassthrough];
     }
