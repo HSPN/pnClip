@@ -112,6 +112,7 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 @property(nonatomic) BOOL recordingMouseInputEnabled;
 @property(nonatomic, strong) id globalMouseMonitor;
 @property(nonatomic, strong) id localMouseMonitor;
+@property(nonatomic, strong) id localKeyMonitor;
 @property(nonatomic, strong) NSTimer *mouseTrackingTimer;
 @property(nonatomic, strong) NSURL *saveDirectoryURL;
 @property(nonatomic, strong) NSURL *lastCreatedFileURL;
@@ -690,6 +691,30 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         [weakSelf updateMousePassthrough];
         return event;
     }];
+    self.localKeyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                                                  handler:^NSEvent *(NSEvent *event) {
+        AppDelegate *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.selectionWindow || NSApp.modalWindow) return event;
+
+        NSEventModifierFlags modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+        if (event.keyCode == 17 && modifiers == NSEventModifierFlagCommand) {
+            [strongSelf newWindow:nil];
+            return nil;
+        }
+
+        NSEventModifierFlags escapeModifiers = modifiers & (NSEventModifierFlagCommand |
+                                                              NSEventModifierFlagOption |
+                                                              NSEventModifierFlagControl |
+                                                              NSEventModifierFlagShift);
+        if (event.keyCode == 53 && escapeModifiers == 0) {
+            NSWindow *window = [strongSelf activeCaptureWindow];
+            if (window && !window.attachedSheet) {
+                [window close];
+                return nil;
+            }
+        }
+        return event;
+    }];
     self.mouseTrackingTimer = [NSTimer scheduledTimerWithTimeInterval:0.05
                                                               repeats:YES
                                                                 block:^(NSTimer *timer) {
@@ -740,6 +765,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 - (void)applicationWillTerminate:(NSNotification *)notification {
     if (self.globalMouseMonitor) [NSEvent removeMonitor:self.globalMouseMonitor];
     if (self.localMouseMonitor) [NSEvent removeMonitor:self.localMouseMonitor];
+    if (self.localKeyMonitor) [NSEvent removeMonitor:self.localKeyMonitor];
     [self.mouseTrackingTimer invalidate];
     [self removeRecordingShortcutTap];
     if (self.accessingSecurityScopedDirectory) {
@@ -1418,12 +1444,6 @@ static NSMenu *CreateMainMenu(AppDelegate *delegate) {
                                                keyEquivalent:@"n"];
     newWindow.target = delegate;
     [fileMenu addItem:newWindow];
-    NSMenuItem *newWindowWithTabShortcut = [[NSMenuItem alloc]
-        initWithTitle:@"새 탭"
-               action:@selector(newWindow:)
-        keyEquivalent:@"t"];
-    newWindowWithTabShortcut.target = delegate;
-    [fileMenu addItem:newWindowWithTabShortcut];
     NSMenuItem *closeWindow = [[NSMenuItem alloc] initWithTitle:@"창 닫기"
                                                         action:@selector(closeCurrentWindow:)
                                                  keyEquivalent:@"w"];
