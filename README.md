@@ -21,8 +21,10 @@ make
 open build/PNClip.app
 ```
 
-`make`는 macOS가 화면 기록 권한을 동일한 앱에 유지할 수 있도록 앱 번들 전체를
-로컬 키체인의 `PNClip Development` 인증서와 `com.example.PNClip` 식별자로 서명합니다.
+`make`는 먼저 로컬 키체인에서 코드 서명이 가능한 `PNClip Development` 인증서를 찾습니다.
+인증서가 있으면 해당 인증서와 `com.example.PNClip` 식별자로 앱 번들 전체를 서명하고,
+다른 Mac처럼 인증서가 없으면 빌드가 실패하지 않도록 자동으로 ad-hoc 서명을 사용합니다.
+ad-hoc 서명은 앱 실행에는 충분하지만 Mac마다 별도의 화면 기록 및 접근성 권한 승인이 필요합니다.
 처음 캡처할 때 화면 기록 권한을 허용한 후 앱을 다시 실행하세요.
 
 Xcode에서는 `PNClip.xcodeproj`를 열고 Run을 누르면 됩니다.
