@@ -102,7 +102,7 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 @property(nonatomic, strong) NSSlider *transparencySlider;
 @property(nonatomic, weak) NSWindow *selectedWindow;
 @property(nonatomic, strong) NSStatusItem *statusItem;
-@property(nonatomic, strong) SelectionWindow *selectionWindow;
+@property(nonatomic, strong) NSMutableArray<SelectionWindow *> *selectionWindows;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, CaptureRecorder *> *recorders;
 @property(nonatomic, strong) NSMutableSet<NSNumber *> *mousePassthroughWindowIDs;
 @property(nonatomic, strong) NSNumber *globalRecordingWindowKey;
@@ -142,7 +142,8 @@ static BOOL CopyAXElementFrame(AXUIElementRef element, CGRect *frame) {
 - (void)flashCaptureBorderForWindow:(NSWindow *)window;
 - (void)dismissSelectionWindow;
 - (void)updateMousePassthrough;
-- (NSRect)componentFrameAtScreenPoint:(NSPoint)screenPoint;
+- (NSRect)componentFrameAtScreenPoint:(NSPoint)screenPoint
+                           belowWindow:(SelectionWindow *)overlayWindow;
 - (void)capture:(id)sender;
 - (void)toggleRecording:(id)sender;
 - (void)toggleRecordingMouseInput:(id)sender;
@@ -668,6 +669,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     self.windows = [NSMutableArray array];
+    self.selectionWindows = [NSMutableArray array];
     self.recorders = [NSMutableDictionary dictionary];
     self.mousePassthroughWindowIDs = [NSMutableSet set];
     self.recordingMouseInputEnabled = NO;
@@ -695,7 +697,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     self.localKeyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
                                                                   handler:^NSEvent *(NSEvent *event) {
         AppDelegate *strongSelf = weakSelf;
-        if (!strongSelf || strongSelf.selectionWindow || NSApp.modalWindow) return event;
+        if (!strongSelf || strongSelf.selectionWindows.count > 0 || NSApp.modalWindow) return event;
 
         NSEventModifierFlags modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
         if (event.keyCode == 17 && modifiers == NSEventModifierFlagCommand) {
@@ -936,8 +938,10 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 }
 
 - (void)dismissSelectionWindow {
-    [self.selectionWindow orderOut:nil];
-    self.selectionWindow = nil;
+    for (SelectionWindow *window in self.selectionWindows) {
+        [window orderOut:nil];
+    }
+    [self.selectionWindows removeAllObjects];
 }
 
 - (void)updateMousePassthrough {
@@ -955,13 +959,14 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     }
 }
 
-- (NSRect)componentFrameAtScreenPoint:(NSPoint)screenPoint {
-    if (!self.selectionWindow) return NSZeroRect;
+- (NSRect)componentFrameAtScreenPoint:(NSPoint)screenPoint
+                           belowWindow:(SelectionWindow *)overlayWindow {
+    if (!overlayWindow || ![self.selectionWindows containsObject:overlayWindow]) return NSZeroRect;
 
     CGFloat primaryTop = NSMaxY(NSScreen.screens.firstObject.frame);
     CGPoint quartzPoint = CGPointMake(screenPoint.x, primaryTop - screenPoint.y);
     CFArrayRef windowInfoRef = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenBelowWindow,
-                                                          (CGWindowID)self.selectionWindow.windowNumber);
+                                                          (CGWindowID)overlayWindow.windowNumber);
     NSArray *windowInfo = CFBridgingRelease(windowInfoRef);
     pid_t targetPID = 0;
     CGRect targetWindowFrame = CGRectZero;
@@ -1163,53 +1168,67 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 }
 
 - (void)statusItemClicked:(id)sender {
-    if (self.selectionWindow) return;
+    if (self.selectionWindows.count > 0) return;
 
     NSDictionary *accessibilityOptions = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
     AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)accessibilityOptions);
 
-    NSRect screenUnion = NSZeroRect;
-    for (NSScreen *screen in NSScreen.screens) {
-        screenUnion = NSIsEmptyRect(screenUnion) ? screen.frame : NSUnionRect(screenUnion, screen.frame);
-    }
-    self.selectionWindow = [[SelectionWindow alloc]
-        initWithContentRect:screenUnion
-                  styleMask:NSWindowStyleMaskBorderless
-                    backing:NSBackingStoreBuffered
-                      defer:NO];
-    self.selectionWindow.backgroundColor = NSColor.clearColor;
-    self.selectionWindow.opaque = NO;
-    self.selectionWindow.hasShadow = NO;
-    self.selectionWindow.ignoresMouseEvents = NO;
-    self.selectionWindow.acceptsMouseMovedEvents = YES;
-    self.selectionWindow.level = NSScreenSaverWindowLevel;
-    self.selectionWindow.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
-                                              NSWindowCollectionBehaviorFullScreenAuxiliary;
-
-    SelectionView *selectionView = [[SelectionView alloc]
-        initWithFrame:NSMakeRect(0, 0, NSWidth(screenUnion), NSHeight(screenUnion))];
     __weak AppDelegate *weakSelf = self;
-    selectionView.completion = ^(NSRect selectedFrame) {
-        AppDelegate *strongSelf = weakSelf;
-        [strongSelf dismissSelectionWindow];
-        [strongSelf createWindowWithFrame:selectedFrame];
-    };
-    selectionView.componentCompletion = ^(NSRect componentFrame) {
-        AppDelegate *strongSelf = weakSelf;
-        [strongSelf dismissSelectionWindow];
-        NSRect windowFrame = NSInsetRect(componentFrame, -kBorderWidth, -kBorderWidth);
-        [strongSelf createWindowWithFrame:windowFrame];
-    };
-    selectionView.cancellation = ^{
-        [weakSelf dismissSelectionWindow];
-    };
-    selectionView.componentFrameProvider = ^NSRect(NSPoint screenPoint) {
-        return [weakSelf componentFrameAtScreenPoint:screenPoint];
-    };
-    self.selectionWindow.contentView = selectionView;
+    SelectionWindow *keyOverlayWindow = nil;
+    for (NSScreen *screen in NSScreen.screens) {
+        SelectionWindow *overlayWindow = [[SelectionWindow alloc]
+            initWithContentRect:screen.frame
+                      styleMask:NSWindowStyleMaskBorderless
+                        backing:NSBackingStoreBuffered
+                          defer:NO];
+        overlayWindow.backgroundColor = NSColor.clearColor;
+        overlayWindow.opaque = NO;
+        overlayWindow.hasShadow = NO;
+        overlayWindow.ignoresMouseEvents = NO;
+        overlayWindow.acceptsMouseMovedEvents = YES;
+        overlayWindow.level = NSScreenSaverWindowLevel;
+        overlayWindow.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                           NSWindowCollectionBehaviorFullScreenAuxiliary;
+
+        SelectionView *selectionView = [[SelectionView alloc]
+            initWithFrame:NSMakeRect(0, 0, NSWidth(screen.frame), NSHeight(screen.frame))];
+        selectionView.completion = ^(NSRect selectedFrame) {
+            AppDelegate *strongSelf = weakSelf;
+            [strongSelf dismissSelectionWindow];
+            [strongSelf createWindowWithFrame:selectedFrame];
+        };
+        selectionView.componentCompletion = ^(NSRect componentFrame) {
+            AppDelegate *strongSelf = weakSelf;
+            [strongSelf dismissSelectionWindow];
+            NSRect windowFrame = NSInsetRect(componentFrame, -kBorderWidth, -kBorderWidth);
+            [strongSelf createWindowWithFrame:windowFrame];
+        };
+        selectionView.cancellation = ^{
+            [weakSelf dismissSelectionWindow];
+        };
+        __weak SelectionWindow *weakOverlayWindow = overlayWindow;
+        selectionView.componentFrameProvider = ^NSRect(NSPoint screenPoint) {
+            return [weakSelf componentFrameAtScreenPoint:screenPoint
+                                             belowWindow:weakOverlayWindow];
+        };
+        overlayWindow.contentView = selectionView;
+        [overlayWindow makeFirstResponder:selectionView];
+        [self.selectionWindows addObject:overlayWindow];
+        [overlayWindow orderFront:nil];
+        if (!keyOverlayWindow || NSPointInRect(NSEvent.mouseLocation, screen.frame)) {
+            keyOverlayWindow = overlayWindow;
+        }
+    }
+
     [NSApp activateIgnoringOtherApps:YES];
-    [self.selectionWindow makeKeyAndOrderFront:nil];
-    [self.selectionWindow makeFirstResponder:selectionView];
+    [keyOverlayWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)applicationDidChangeScreenParameters:(NSNotification *)notification {
+    (void)notification;
+    if (self.selectionWindows.count > 0) {
+        [self dismissSelectionWindow];
+    }
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
