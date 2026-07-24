@@ -1458,7 +1458,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
         SCStreamConfiguration *configuration = [strongSelf configurationForRect:recordingRect
                                                                          onScreen:screen
-                                                                   usesNativeScale:NO];
+                                                                   usesNativeScale:YES];
         configuration.minimumFrameInterval = CMTimeMake(1, (int32_t)kRecordingFramesPerSecond);
         configuration.queueDepth = 8;
         configuration.pixelFormat = kCVPixelFormatType_32BGRA;
