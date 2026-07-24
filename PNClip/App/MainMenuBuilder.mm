@@ -60,7 +60,55 @@ NSMenu *PNClipCreateMainMenu(AppDelegate *delegate) {
         action:@selector(toggleRecording:) keyEquivalent:@"r"];
     record.target = delegate;
     [captureMenu addItem:record];
+    NSMenuItem *rolling = [[NSMenuItem alloc] initWithTitle:@"최근 GIF 상시 녹화"
+        action:@selector(toggleRollingRecording:) keyEquivalent:@"r"];
+    rolling.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+    rolling.target = delegate;
+    delegate.rollingRecordingItem = rolling;
+    [captureMenu addItem:rolling];
     [captureMenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *durationItem = [[NSMenuItem alloc] initWithTitle:@"GIF 길이"
+        action:nil keyEquivalent:@""];
+    NSMenu *durationMenu = [[NSMenu alloc] initWithTitle:@"GIF 길이"];
+    durationMenu.autoenablesItems = NO;
+    NSMenuItem *fiveSeconds = [[NSMenuItem alloc] initWithTitle:@"5초"
+        action:@selector(selectRecordingDuration:) keyEquivalent:@""];
+    fiveSeconds.tag = 5;
+    fiveSeconds.target = delegate;
+    fiveSeconds.state = NSControlStateValueOn;
+    delegate.fiveSecondItem = fiveSeconds;
+    [durationMenu addItem:fiveSeconds];
+    NSMenuItem *tenSeconds = [[NSMenuItem alloc] initWithTitle:@"10초"
+        action:@selector(selectRecordingDuration:) keyEquivalent:@""];
+    tenSeconds.tag = 10;
+    tenSeconds.target = delegate;
+    delegate.tenSecondItem = tenSeconds;
+    [durationMenu addItem:tenSeconds];
+    durationItem.submenu = durationMenu;
+    [captureMenu addItem:durationItem];
+
+    NSMenuItem *scaleItem = [[NSMenuItem alloc] initWithTitle:@"GIF 해상도"
+        action:nil keyEquivalent:@""];
+    NSMenu *scaleMenu = [[NSMenu alloc] initWithTitle:@"GIF 해상도"];
+    scaleMenu.autoenablesItems = NO;
+    NSMenuItem *standardScale = [[NSMenuItem alloc] initWithTitle:@"일반"
+        action:@selector(selectRecordingScale:) keyEquivalent:@""];
+    standardScale.tag = 1;
+    standardScale.target = delegate;
+    standardScale.state = NSControlStateValueOn;
+    delegate.standardScaleItem = standardScale;
+    [scaleMenu addItem:standardScale];
+    NSMenuItem *retinaScale = [[NSMenuItem alloc] initWithTitle:@"Retina"
+        action:@selector(selectRecordingScale:) keyEquivalent:@""];
+    retinaScale.tag = 2;
+    retinaScale.target = delegate;
+    delegate.retinaScaleItem = retinaScale;
+    [scaleMenu addItem:retinaScale];
+    scaleItem.submenu = scaleMenu;
+    [captureMenu addItem:scaleItem];
+    [captureMenu addItem:NSMenuItem.separatorItem];
+
     NSMenuItem *mouseInput = [[NSMenuItem alloc] initWithTitle:@"녹화 중 마우스 입력"
         action:@selector(toggleRecordingMouseInput:) keyEquivalent:@""];
     mouseInput.target = delegate;
@@ -89,5 +137,13 @@ NSMenu *PNClipCreateMainMenu(AppDelegate *delegate) {
     sliderItem.view = container;
     [viewMenu addItem:sliderItem];
     viewMenuItem.submenu = viewMenu;
+
+    NSMenuItem *estimatedSize = [[NSMenuItem alloc] initWithTitle:@"예상 GIF: 계산 중…"
+        action:nil keyEquivalent:@""];
+    estimatedSize.submenu = [[NSMenu alloc] initWithTitle:estimatedSize.title];
+    estimatedSize.enabled = NO;
+    estimatedSize.hidden = YES;
+    delegate.estimatedSizeItem = estimatedSize;
+    [mainMenu addItem:estimatedSize];
     return mainMenu;
 }

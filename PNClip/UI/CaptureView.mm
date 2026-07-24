@@ -43,10 +43,12 @@ static NSCursor *CursorForResizeEdge(ResizeEdge edge) {
     NSPoint _resizeStartPoint;
     NSRect _resizeStartFrame;
     BOOL _recordingActive;
+    BOOL _rollingRecordingActive;
     BOOL _captureFlashActive;
 }
 
 @synthesize recordingActive = _recordingActive;
+@synthesize rollingRecordingActive = _rollingRecordingActive;
 @synthesize captureFlashActive = _captureFlashActive;
 
 - (instancetype)initWithFrame:(NSRect)frameRect {
@@ -56,6 +58,16 @@ static NSCursor *CursorForResizeEdge(ResizeEdge edge) {
 }
 
 - (BOOL)isOpaque { return NO; }
+
+- (BOOL)isWindowGeometryLocked {
+    return self.isRecordingActive || self.isRollingRecordingActive;
+}
+
+- (void)recordingStateDidChange {
+    if (self.isWindowGeometryLocked) _resizeEdge = ResizeEdgeNone;
+    [self.window invalidateCursorRectsForView:self];
+    [self setNeedsDisplay:YES];
+}
 
 - (void)drawRect:(NSRect)dirtyRect {
     [super drawRect:dirtyRect];
@@ -67,9 +79,11 @@ static NSCursor *CursorForResizeEdge(ResizeEdge edge) {
     NSBezierPath *border = [NSBezierPath bezierPathWithRect:
         NSInsetRect(self.bounds, kBorderWidth / 2.0, kBorderWidth / 2.0)];
     border.lineWidth = kBorderWidth;
-    NSColor *borderColor = (self.isRecordingActive || self.isCaptureFlashActive)
-        ? [NSColor colorWithCalibratedRed:1.0 green:0.48 blue:0.08 alpha:1.0]
-        : [NSColor colorWithCalibratedRed:0.16 green:0.64 blue:1.0 alpha:1.0];
+    NSColor *borderColor = self.isRollingRecordingActive
+        ? [NSColor colorWithCalibratedRed:0.94 green:0.12 blue:0.12 alpha:1.0]
+        : ((self.isRecordingActive || self.isCaptureFlashActive)
+            ? [NSColor colorWithCalibratedRed:1.0 green:0.48 blue:0.08 alpha:1.0]
+            : [NSColor colorWithCalibratedRed:0.16 green:0.64 blue:1.0 alpha:1.0]);
     [borderColor setStroke];
     [border stroke];
 }
@@ -77,7 +91,7 @@ static NSCursor *CursorForResizeEdge(ResizeEdge edge) {
 - (void)setRecordingActive:(BOOL)value {
     if (_recordingActive == value) return;
     _recordingActive = value;
-    [self setNeedsDisplay:YES];
+    [self recordingStateDidChange];
 }
 
 - (void)setCaptureFlashActive:(BOOL)value {
@@ -86,10 +100,20 @@ static NSCursor *CursorForResizeEdge(ResizeEdge edge) {
     [self setNeedsDisplay:YES];
 }
 
+- (void)setRollingRecordingActive:(BOOL)value {
+    if (_rollingRecordingActive == value) return;
+    _rollingRecordingActive = value;
+    [self recordingStateDidChange];
+}
+
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { return YES; }
 
 - (void)mouseDown:(NSEvent *)event {
     [self.window makeKeyAndOrderFront:nil];
+    if (self.isWindowGeometryLocked) {
+        _resizeEdge = ResizeEdgeNone;
+        return;
+    }
     _resizeEdge = [self resizeEdgeAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
     if (_resizeEdge == ResizeEdgeNone) {
         [self.window performWindowDragWithEvent:event];
@@ -100,6 +124,7 @@ static NSCursor *CursorForResizeEdge(ResizeEdge edge) {
 }
 
 - (void)mouseDragged:(NSEvent *)event {
+    if (self.isWindowGeometryLocked) return;
     if (_resizeEdge == ResizeEdgeNone) return;
     NSPoint currentPoint = NSEvent.mouseLocation;
     CGFloat dx = currentPoint.x - _resizeStartPoint.x;
@@ -143,6 +168,7 @@ static NSCursor *CursorForResizeEdge(ResizeEdge edge) {
 
 - (void)resetCursorRects {
     [super resetCursorRects];
+    if (self.isWindowGeometryLocked) return;
     NSRect bounds = self.bounds;
     CGFloat corner = MIN(kCornerResizeHitSize, MIN(NSWidth(bounds), NSHeight(bounds)) / 2.0);
     CGFloat edge = MIN(kEdgeResizeHitWidth, corner);
@@ -158,4 +184,3 @@ static NSCursor *CursorForResizeEdge(ResizeEdge edge) {
     [self addCursorRect:NSMakeRect(corner, NSHeight(bounds)-edge, horizontal, edge) cursor:CursorForResizeEdge(ResizeEdgeTop)];
 }
 @end
-

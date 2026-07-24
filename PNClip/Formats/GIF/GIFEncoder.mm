@@ -42,10 +42,10 @@ static NSError *GIFError(NSInteger code, NSString *message) {
 
 @implementation GIFEncoder
 - (BOOL)encodeFrames:(NSArray *)frames
+      frameDurations:(NSArray<NSNumber *> *)frameDurations
                toURL:(NSURL *)destinationURL
-           frameRate:(NSUInteger)frameRate
                error:(NSError **)error {
-    if (frames.count == 0 || frameRate == 0) {
+    if (frames.count == 0 || frameDurations.count != frames.count) {
         if (error) *error = GIFError(1, @"인코딩할 프레임이 없습니다.");
         return NO;
     }
@@ -97,6 +97,7 @@ static NSError *GIFError(NSInteger code, NSString *message) {
     [gif appendBytes:loopExtension length:sizeof(loopExtension)];
 
     NSInteger previousTick = 0;
+    NSTimeInterval elapsed = 0;
     for (NSUInteger index = 0; index < frames.count; index++) {
         @autoreleasepool {
             CGImageRef frame = (__bridge CGImageRef)frames[index];
@@ -107,8 +108,9 @@ static NSError *GIFError(NSInteger code, NSString *message) {
             }
             NSData *indexed = [ditherer indexedPixelsForRGBABytes:(const uint8_t *)rgba.bytes
                 width:width height:height bytesPerRow:width * 4];
-            NSInteger tick = lround((double)(index + 1) * 100.0 / frameRate);
-            uint16_t delay = (uint16_t)MAX(2, tick - previousTick);
+            elapsed += MAX(0.01, frameDurations[index].doubleValue);
+            NSInteger tick = lround(elapsed * 100.0);
+            uint16_t delay = (uint16_t)MAX(1, tick - previousTick);
             previousTick = tick;
 
             const uint8_t gcePrefix[] = {0x21, 0xF9, 0x04, 0x00};

@@ -8,6 +8,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import "AppDelegate.h"
 #import "../Capture/CaptureRecorder.h"
+#import "../Capture/RollingCaptureRecorder.h"
 #import "../Support/PNClipConstants.h"
 #import "../Support/AccessibilityElementDetector.h"
 #import "../UI/CaptureWindow.h"
@@ -47,8 +48,11 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     self.windows = [NSMutableArray array];
     self.selectionWindows = [NSMutableArray array];
     self.recorders = [NSMutableDictionary dictionary];
+    self.rollingRecorders = [NSMutableDictionary dictionary];
     self.mousePassthroughWindowIDs = [NSMutableSet set];
     self.recordingMouseInputEnabled = NO;
+    self.recordingDuration = 5.0;
+    self.recordingUsesNativeScale = NO;
     self.elementDetector = [[AccessibilityElementDetector alloc] init];
     [self refreshLaunchAtLoginState];
     [self restoreSaveDirectory];
@@ -77,6 +81,14 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
         if (!strongSelf || strongSelf.selectionWindows.count > 0 || NSApp.modalWindow) return event;
 
         NSEventModifierFlags modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+        if (event.keyCode == 8 && modifiers == NSEventModifierFlagCommand) {
+            NSWindow *window = [strongSelf activeCaptureWindow];
+            NSNumber *windowKey = window ? @((CGWindowID)window.windowNumber) : nil;
+            if (windowKey && strongSelf.rollingRecorders[windowKey]) {
+                [strongSelf saveRollingRecording:nil];
+                return nil;
+            }
+        }
         if (event.keyCode == 17 && modifiers == NSEventModifierFlagCommand) {
             [strongSelf newWindow:nil];
             return nil;
@@ -103,6 +115,12 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
             [weakSelf updateMousePassthrough];
         }
     }];
+    self.estimatedSizeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                              target:self
+                                                            selector:@selector(updateEstimatedGIFSize:)
+                                                            userInfo:nil
+                                                             repeats:YES];
+    [self updateEstimatedGIFSize:nil];
     self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
     NSStatusBarButton *statusButton = self.statusItem.button;
     statusButton.image = [NSImage imageWithSystemSymbolName:@"viewfinder"
@@ -147,7 +165,9 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     if (self.localMouseMonitor) [NSEvent removeMonitor:self.localMouseMonitor];
     if (self.localKeyMonitor) [NSEvent removeMonitor:self.localKeyMonitor];
     [self.mouseTrackingTimer invalidate];
+    [self.estimatedSizeTimer invalidate];
     [self removeRecordingShortcutTap];
+    for (RollingCaptureRecorder *recorder in self.rollingRecorders.allValues) [recorder stop];
     if (self.accessingSecurityScopedDirectory) {
         [self.saveDirectoryURL stopAccessingSecurityScopedResource];
     }
@@ -297,6 +317,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
         ? (CaptureView *)window.contentView
         : nil;
     view.recordingActive = recording;
+    [self updateEstimatedGIFSize:nil];
 }
 
 - (void)flashCaptureBorderForWindow:(NSWindow *)window {
@@ -588,6 +609,9 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     CaptureView *view = (CaptureView *)self.selectedWindow.contentView;
     self.transparencySlider.doubleValue = view.interiorTransparency;
     self.transparencySlider.enabled = YES;
+    NSNumber *windowKey = @((CGWindowID)self.selectedWindow.windowNumber);
+    self.rollingRecordingItem.state = self.rollingRecorders[windowKey]
+        ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
@@ -595,6 +619,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     NSNumber *windowKey = @((CGWindowID)window.windowNumber);
     [self stopMousePassthroughForWindow:window key:windowKey];
     [self.recorders[windowKey] stop];
+    [self.rollingRecorders[windowKey] stop];
+    [self.rollingRecorders removeObjectForKey:windowKey];
     if (self.selectedWindow == notification.object) {
         self.selectedWindow = nil;
     }
@@ -602,6 +628,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     if (self.windows.count == 0) {
         self.transparencySlider.enabled = NO;
     }
+    [self updateEstimatedGIFSize:nil];
 }
 
 - (void)capture:(id)sender {
@@ -656,6 +683,15 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     if (!targetWindow) return;
 
     NSNumber *windowKey = @((CGWindowID)targetWindow.windowNumber);
+    RollingCaptureRecorder *rollingRecorder = self.rollingRecorders[windowKey];
+    if (rollingRecorder) {
+        [rollingRecorder stop];
+        [self.rollingRecorders removeObjectForKey:windowKey];
+        ((CaptureView *)targetWindow.contentView).rollingRecordingActive = NO;
+        self.rollingRecordingItem.state = NSControlStateValueOff;
+        [self updateEstimatedGIFSize:nil];
+        return;
+    }
     CaptureRecorder *existingRecorder = self.recorders[windowKey];
     if (existingRecorder) {
         [self stopMousePassthroughForWindow:targetWindow key:windowKey];
@@ -668,10 +704,12 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     NSRect contentRect = [targetWindow contentRectForFrameRect:targetWindow.frame];
     NSRect recordingRect = NSInsetRect(contentRect, PNClipBorderWidth, PNClipBorderWidth);
     NSScreen *screen = targetWindow.screen ? targetWindow.screen : NSScreen.mainScreen;
+    BOOL usesNativeScale = self.recordingUsesNativeScale;
 
     CaptureRecorder *recorder = [[CaptureRecorder alloc]
         initWithWindowID:windowKey.unsignedIntValue
-       destinationFolder:self.saveDirectoryURL];
+       destinationFolder:self.saveDirectoryURL
+          maximumDuration:self.recordingDuration];
     self.recorders[windowKey] = recorder;
     if (self.recordingMouseInputEnabled) {
         if (![self installRecordingShortcutTapForWindow:targetWindow]) {
@@ -703,7 +741,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
 
         SCStreamConfiguration *configuration = [strongSelf configurationForRect:recordingRect
                                                                          onScreen:screen
-                                                                   usesNativeScale:YES];
+                                                                   usesNativeScale:usesNativeScale];
         configuration.minimumFrameInterval = CMTimeMake(1, (int32_t)PNClipRecordingFramesPerSecond);
         configuration.queueDepth = 8;
         configuration.pixelFormat = kCVPixelFormatType_32BGRA;
@@ -734,6 +772,170 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
             }
         }];
     }];
+}
+
+- (void)toggleRollingRecording:(id)sender {
+    NSWindow *targetWindow = [self activeCaptureWindow];
+    if (!targetWindow) return;
+    NSNumber *windowKey = @((CGWindowID)targetWindow.windowNumber);
+    RollingCaptureRecorder *existing = self.rollingRecorders[windowKey];
+    CaptureView *view = (CaptureView *)targetWindow.contentView;
+    if (existing) {
+        [existing stop];
+        [self.rollingRecorders removeObjectForKey:windowKey];
+        view.rollingRecordingActive = NO;
+        self.rollingRecordingItem.state = NSControlStateValueOff;
+        return;
+    }
+    if (self.recorders[windowKey]) {
+        NSBeep();
+        [self showAlertWithTitle:@"상시 녹화 시작 불가"
+                         message:@"일반 GIF 녹화를 먼저 중지해 주세요."
+                          window:targetWindow];
+        return;
+    }
+    if (![self ensureScreenCaptureAccessForWindow:targetWindow]) return;
+
+    NSRect contentRect = [targetWindow contentRectForFrameRect:targetWindow.frame];
+    NSRect recordingRect = NSInsetRect(contentRect, PNClipBorderWidth, PNClipBorderWidth);
+    NSScreen *screen = targetWindow.screen ?: NSScreen.mainScreen;
+    BOOL usesNativeScale = self.recordingUsesNativeScale;
+    RollingCaptureRecorder *recorder = [[RollingCaptureRecorder alloc]
+        initWithDestinationFolder:self.saveDirectoryURL];
+    self.rollingRecorders[windowKey] = recorder;
+    view.rollingRecordingActive = YES;
+    self.rollingRecordingItem.state = NSControlStateValueOn;
+    [self updateEstimatedGIFSize:nil];
+    __weak AppDelegate *weakSelf = self;
+    __weak NSWindow *weakWindow = targetWindow;
+
+    [self loadContentFilterForScreen:screen completion:^(SCContentFilter *filter, NSError *error) {
+        AppDelegate *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.rollingRecorders[windowKey] != recorder) return;
+        if (error || !filter) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [strongSelf.rollingRecorders removeObjectForKey:windowKey];
+                ((CaptureView *)weakWindow.contentView).rollingRecordingActive = NO;
+                strongSelf.rollingRecordingItem.state = NSControlStateValueOff;
+                [strongSelf updateEstimatedGIFSize:nil];
+                [strongSelf showAlertWithTitle:@"상시 녹화 실패"
+                                       message:error.localizedDescription ?: @"녹화할 디스플레이를 찾을 수 없습니다."
+                                        window:weakWindow];
+            });
+            return;
+        }
+        SCStreamConfiguration *configuration = [strongSelf configurationForRect:recordingRect
+                                                                         onScreen:screen
+                                                                   usesNativeScale:usesNativeScale];
+        configuration.minimumFrameInterval = CMTimeMake(1, (int32_t)PNClipRecordingFramesPerSecond);
+        configuration.queueDepth = 8;
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA;
+        configuration.showsCursor = NO;
+        configuration.capturesAudio = NO;
+        [recorder startWithFilter:filter configuration:configuration completion:^(NSError *startError) {
+            AppDelegate *completionSelf = weakSelf;
+            if (!completionSelf || !startError) return;
+            if (completionSelf.rollingRecorders[windowKey] == recorder) {
+                [completionSelf.rollingRecorders removeObjectForKey:windowKey];
+            }
+            ((CaptureView *)weakWindow.contentView).rollingRecordingActive = NO;
+            completionSelf.rollingRecordingItem.state = NSControlStateValueOff;
+            [completionSelf updateEstimatedGIFSize:nil];
+            [completionSelf showAlertWithTitle:@"상시 녹화 실패"
+                                       message:startError.localizedDescription
+                                        window:weakWindow];
+        }];
+    }];
+}
+
+- (void)saveRollingRecording:(id)sender {
+    NSWindow *targetWindow = [self activeCaptureWindow];
+    if (!targetWindow) return;
+    NSNumber *windowKey = @((CGWindowID)targetWindow.windowNumber);
+    RollingCaptureRecorder *recorder = self.rollingRecorders[windowKey];
+    if (!recorder) return;
+    __weak AppDelegate *weakSelf = self;
+    __weak NSWindow *weakWindow = targetWindow;
+    [recorder saveRecentGIFWithDuration:self.recordingDuration
+                             completion:^(NSURL *fileURL, NSError *error) {
+        AppDelegate *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (error) {
+            NSBeep();
+            [strongSelf showAlertWithTitle:@"최근 GIF 저장 실패"
+                                   message:error.localizedDescription
+                                    window:weakWindow];
+        } else if (fileURL) {
+            strongSelf.lastCreatedFileURL = fileURL;
+            [strongSelf copyGIFAtURLToPasteboard:fileURL];
+        }
+    }];
+}
+
+- (void)selectRecordingDuration:(NSMenuItem *)sender {
+    if (!self.fiveSecondItem.enabled) return;
+    self.recordingDuration = sender.tag == 10 ? 10.0 : 5.0;
+    self.fiveSecondItem.state = self.recordingDuration == 5.0
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    self.tenSecondItem.state = self.recordingDuration == 10.0
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    [self updateEstimatedGIFSize:nil];
+}
+
+- (void)selectRecordingScale:(NSMenuItem *)sender {
+    if (!self.standardScaleItem.enabled) return;
+    self.recordingUsesNativeScale = sender.tag == 2;
+    self.standardScaleItem.state = self.recordingUsesNativeScale
+        ? NSControlStateValueOff : NSControlStateValueOn;
+    self.retinaScaleItem.state = self.recordingUsesNativeScale
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    [self updateEstimatedGIFSize:nil];
+}
+
+- (void)updateEstimatedGIFSize:(NSTimer *)timer {
+    BOOL hasActiveRecording = NO;
+    for (NSWindow *candidate in self.windows) {
+        CaptureView *view = (CaptureView *)candidate.contentView;
+        if ([view isKindOfClass:CaptureView.class] &&
+            (view.isRecordingActive || view.isRollingRecordingActive)) {
+            hasActiveRecording = YES;
+            break;
+        }
+    }
+    self.estimatedSizeItem.hidden = !hasActiveRecording;
+    self.fiveSecondItem.enabled = !hasActiveRecording;
+    self.tenSecondItem.enabled = !hasActiveRecording;
+    self.standardScaleItem.enabled = !hasActiveRecording;
+    self.retinaScaleItem.enabled = !hasActiveRecording;
+    if (!hasActiveRecording) return;
+
+    NSWindow *window = [self activeCaptureWindow];
+    NSNumber *windowKey = window ? @((CGWindowID)window.windowNumber) : nil;
+    if (!self.recorders[windowKey] && !self.rollingRecorders[windowKey]) {
+        for (NSWindow *candidate in self.windows) {
+            NSNumber *candidateKey = @((CGWindowID)candidate.windowNumber);
+            if (self.recorders[candidateKey] || self.rollingRecorders[candidateKey]) {
+                window = candidate;
+                windowKey = candidateKey;
+                break;
+            }
+        }
+    }
+    if (!window || !windowKey) {
+        NSString *title = @"예상 GIF: -- MB";
+        self.estimatedSizeItem.title = title;
+        self.estimatedSizeItem.submenu.title = title;
+        return;
+    }
+    RollingCaptureRecorder *rolling = self.rollingRecorders[windowKey];
+    CaptureRecorder *recorder = self.recorders[windowKey];
+    unsigned long long bytes = rolling
+        ? [rolling estimatedGIFSizeForDuration:self.recordingDuration]
+        : [recorder estimatedGIFSize];
+    NSString *title = [NSString stringWithFormat:@"예상 GIF: %.1f MB",
+        bytes / (1024.0 * 1024.0)];
+    self.estimatedSizeItem.title = title;
+    self.estimatedSizeItem.submenu.title = title;
 }
 
 - (void)transparencyChanged:(NSSlider *)sender {

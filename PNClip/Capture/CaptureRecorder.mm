@@ -16,9 +16,12 @@
     BOOL _finishing;
     NSURL *_destinationFolder;
     id<AnimatedImageEncoder> _animationEncoder;
+    NSTimeInterval _maximumDuration;
 }
 
-- (instancetype)initWithWindowID:(CGWindowID)windowID destinationFolder:(NSURL *)folder {
+- (instancetype)initWithWindowID:(CGWindowID)windowID
+                destinationFolder:(NSURL *)folder
+                   maximumDuration:(NSTimeInterval)maximumDuration {
     self = [super init];
     if (self) {
         _windowID = windowID;
@@ -27,6 +30,7 @@
         _ciContext = [CIContext contextWithOptions:nil];
         _captureQueue = dispatch_queue_create("com.example.PNClip.gif-capture", DISPATCH_QUEUE_SERIAL);
         _animationEncoder = [[GIFEncoder alloc] init];
+        _maximumDuration = maximumDuration;
     }
     return self;
 }
@@ -62,7 +66,7 @@
             return;
         }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-                                     (int64_t)(PNClipMaximumRecordingDuration * NSEC_PER_SEC)),
+                                     (int64_t)(strongSelf->_maximumDuration * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [weakSelf stop]; });
     }];
 }
@@ -106,6 +110,17 @@
     if (!_stopRequested) [self finishWithURL:nil error:error];
 }
 
+- (unsigned long long)estimatedGIFSize {
+    __block unsigned long long result = 0;
+    dispatch_sync(_captureQueue, ^{
+        CGImageRef image = (__bridge CGImageRef)self->_frames.lastObject;
+        if (!image) return;
+        double pixelsPerFrame = (double)CGImageGetWidth(image) * CGImageGetHeight(image);
+        result = (unsigned long long)(pixelsPerFrame * self->_frames.count * 0.37 + 1024.0);
+    });
+    return result;
+}
+
 - (void)encodeGIF {
     if (_frames.count == 0) {
         NSError *error = [NSError errorWithDomain:PNClipErrorDomain code:1
@@ -117,9 +132,12 @@
         URLsForDirectory:NSDesktopDirectory inDomains:NSUserDomainMask].firstObject;
     NSURL *destination = PNClipTimestampedFileURL(folder, @"PNClip Recording", @"gif");
     NSError *encodingError = nil;
-    if (![_animationEncoder encodeFrames:_frames toURL:destination
-                               frameRate:PNClipRecordingFramesPerSecond
-                                   error:&encodingError]) {
+    NSMutableArray<NSNumber *> *durations = [NSMutableArray arrayWithCapacity:_frames.count];
+    for (NSUInteger index = 0; index < _frames.count; index++) {
+        [durations addObject:@(1.0 / PNClipRecordingFramesPerSecond)];
+    }
+    if (![_animationEncoder encodeFrames:_frames frameDurations:durations
+                                   toURL:destination error:&encodingError]) {
         [self finishWithURL:nil error:encodingError];
         return;
     }

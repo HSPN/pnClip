@@ -3,7 +3,7 @@
 
 @protocol AnimatedImageEncoder <NSObject>
 - (BOOL)encodeFrames:(NSArray *)frames
+      frameDurations:(NSArray<NSNumber *> *)frameDurations
                toURL:(NSURL *)destinationURL
-           frameRate:(NSUInteger)frameRate
                error:(NSError **)error;
 @end

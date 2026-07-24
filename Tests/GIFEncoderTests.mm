@@ -35,7 +35,9 @@ int main(void) {
         NSURL *url = [NSURL fileURLWithPath:@"/tmp/pnclip-gif-encoder-test.gif"];
         NSError *error = nil;
         GIFEncoder *encoder = [[GIFEncoder alloc] init];
-        if (![encoder encodeFrames:frames toURL:url frameRate:24 error:&error]) {
+        NSMutableArray<NSNumber *> *durations = [NSMutableArray array];
+        for (NSUInteger i = 0; i < frames.count; i++) [durations addObject:@(1.0 / 24.0)];
+        if (![encoder encodeFrames:frames frameDurations:durations toURL:url error:&error]) {
             NSLog(@"encode failed: %@", error);
             return 1;
         }
@@ -45,15 +47,22 @@ int main(void) {
             isEqualToString:UTTypeGIF.identifier];
         size_t count = CGImageSourceGetCount(source);
         BOOL validSize = YES;
+        NSTimeInterval decodedDuration = 0;
         for (size_t i = 0; i < count; i++) {
             CGImageRef decoded = CGImageSourceCreateImageAtIndex(source, i, nullptr);
             validSize = validSize && decoded && CGImageGetWidth(decoded) == 96 &&
                         CGImageGetHeight(decoded) == 64;
             if (decoded) CGImageRelease(decoded);
+            NSDictionary *properties = CFBridgingRelease(
+                CGImageSourceCopyPropertiesAtIndex(source, i, nullptr));
+            NSDictionary *gifProperties = properties[(id)kCGImagePropertyGIFDictionary];
+            decodedDuration += [gifProperties[(id)kCGImagePropertyGIFUnclampedDelayTime] doubleValue];
         }
         CFRelease(source);
-        if (!validType || count != frames.count || !validSize) {
-            NSLog(@"invalid GIF: type=%d count=%zu size=%d", validType, count, validSize);
+        BOOL validDuration = fabs(decodedDuration - 0.5) < 0.02;
+        if (!validType || count != frames.count || !validSize || !validDuration) {
+            NSLog(@"invalid GIF: type=%d count=%zu size=%d duration=%.3f",
+                  validType, count, validSize, decodedDuration);
             return 3;
         }
         NSLog(@"GIF encoder test passed: %@ (%zu frames)", url.path, count);
