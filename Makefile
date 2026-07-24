@@ -1,5 +1,6 @@
 APP := build/PNClip.app
 EXECUTABLE := $(APP)/Contents/MacOS/PNClip
+SOURCES := $(shell find PNClip -name '*.mm' -print)
 SIGNING_DIR := /private/tmp/pnclip-signing-$(shell id -u)-$(shell uuidgen)
 SIGNING_APP := $(SIGNING_DIR)/PNClip.app
 SIGNING_CERTIFICATE := PNClip Development
@@ -9,12 +10,12 @@ SIGNING_IDENTITY ?= $(shell /usr/bin/security find-identity -v -p codesigning 2>
 
 all: sign
 
-$(EXECUTABLE): PNClip/main.mm PNClip/Info.plist PNClip/AppIcon.icns
+$(EXECUTABLE): $(SOURCES) PNClip/Info.plist PNClip/AppIcon.icns
 	mkdir -p $(APP)/Contents/MacOS
 	mkdir -p $(APP)/Contents/Resources
 	cp PNClip/Info.plist $(APP)/Contents/Info.plist
 	cp PNClip/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
-	clang++ -std=c++17 -fobjc-arc -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework CoreImage -framework CoreMedia -framework ImageIO -framework ScreenCaptureKit -framework ServiceManagement -framework UniformTypeIdentifiers PNClip/main.mm -o $(EXECUTABLE)
+	clang++ -std=c++17 -fobjc-arc -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework CoreImage -framework CoreMedia -framework ImageIO -framework ScreenCaptureKit -framework ServiceManagement -framework UniformTypeIdentifiers $(SOURCES) -o $(EXECUTABLE)
 
 sign: $(EXECUTABLE)
 	@if [ "$(SIGNING_IDENTITY)" = "-" ]; then \
