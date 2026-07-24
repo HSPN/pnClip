@@ -8,7 +8,11 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 static constexpr CGFloat kBorderWidth = 4.0;
-static constexpr CGFloat kResizeHitWidth = 9.0;
+static constexpr CGFloat kEdgeResizeHitWidth = 12.0;
+static constexpr CGFloat kCornerResizeHitSize = 22.0;
+static constexpr CGFloat kMousePassthroughInset = kCornerResizeHitSize;
+static constexpr CGFloat kMinimumWindowWidth = 160.0;
+static constexpr CGFloat kMinimumWindowHeight = 100.0;
 static constexpr NSInteger kRecordingFramesPerSecond = 24;
 static constexpr NSTimeInterval kMaximumRecordingDuration = 10.0;
 static constexpr NSTimeInterval kCaptureFlashDuration = 0.2;
@@ -22,6 +26,47 @@ typedef NS_OPTIONS(NSUInteger, ResizeEdge) {
     ResizeEdgeBottom = 1 << 2,
     ResizeEdgeTop    = 1 << 3,
 };
+
+static NSCursor *CursorForResizeEdge(ResizeEdge edge) {
+    if (@available(macOS 15.0, *)) {
+        NSCursorFrameResizePosition position;
+        switch (edge) {
+            case ResizeEdgeTop | ResizeEdgeLeft:
+                position = NSCursorFrameResizePositionTopLeft;
+                break;
+            case ResizeEdgeTop | ResizeEdgeRight:
+                position = NSCursorFrameResizePositionTopRight;
+                break;
+            case ResizeEdgeBottom | ResizeEdgeLeft:
+                position = NSCursorFrameResizePositionBottomLeft;
+                break;
+            case ResizeEdgeBottom | ResizeEdgeRight:
+                position = NSCursorFrameResizePositionBottomRight;
+                break;
+            case ResizeEdgeLeft:
+                position = NSCursorFrameResizePositionLeft;
+                break;
+            case ResizeEdgeRight:
+                position = NSCursorFrameResizePositionRight;
+                break;
+            case ResizeEdgeTop:
+                position = NSCursorFrameResizePositionTop;
+                break;
+            default:
+                position = NSCursorFrameResizePositionBottom;
+                break;
+        }
+        return [NSCursor frameResizeCursorFromPosition:position
+                                          inDirections:NSCursorFrameResizeDirectionsAll];
+    }
+
+    BOOL isCorner = (edge & (ResizeEdgeLeft | ResizeEdgeRight)) &&
+                    (edge & (ResizeEdgeTop | ResizeEdgeBottom));
+    if (isCorner) return NSCursor.crosshairCursor;
+    return (edge & (ResizeEdgeLeft | ResizeEdgeRight))
+        ? NSCursor.resizeLeftRightCursor
+        : NSCursor.resizeUpDownCursor;
+}
 
 static NSRect RectBetweenPoints(NSPoint first, NSPoint second) {
     return NSMakeRect(MIN(first.x, second.x),
@@ -258,7 +303,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     CGFloat dx = currentPoint.x - _resizeStartPoint.x;
     CGFloat dy = currentPoint.y - _resizeStartPoint.y;
     NSRect frame = _resizeStartFrame;
-    NSSize minimumSize = NSMakeSize(160.0, 100.0);
+    NSSize minimumSize = NSMakeSize(kMinimumWindowWidth, kMinimumWindowHeight);
 
     if (_resizeEdge & ResizeEdgeLeft) {
         CGFloat newWidth = MAX(minimumSize.width, NSWidth(_resizeStartFrame) - dx);
@@ -284,29 +329,75 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
 }
 
 - (ResizeEdge)resizeEdgeAtPoint:(NSPoint)point {
-    ResizeEdge edge = ResizeEdgeNone;
-    if (point.x <= kResizeHitWidth) edge |= ResizeEdgeLeft;
-    if (point.x >= NSWidth(self.bounds) - kResizeHitWidth) edge |= ResizeEdgeRight;
-    if (point.y <= kResizeHitWidth) edge |= ResizeEdgeBottom;
-    if (point.y >= NSHeight(self.bounds) - kResizeHitWidth) edge |= ResizeEdgeTop;
-    return edge;
+    NSRect bounds = self.bounds;
+    CGFloat cornerSize = MIN(kCornerResizeHitSize,
+                             MIN(NSWidth(bounds), NSHeight(bounds)) / 2.0);
+    CGFloat edgeWidth = MIN(kEdgeResizeHitWidth, cornerSize);
+
+    NSRect bottomLeft = NSMakeRect(0, 0, cornerSize, cornerSize);
+    NSRect bottomRight = NSMakeRect(NSWidth(bounds) - cornerSize, 0,
+                                    cornerSize, cornerSize);
+    NSRect topLeft = NSMakeRect(0, NSHeight(bounds) - cornerSize,
+                                cornerSize, cornerSize);
+    NSRect topRight = NSMakeRect(NSWidth(bounds) - cornerSize,
+                                 NSHeight(bounds) - cornerSize,
+                                 cornerSize, cornerSize);
+    if (NSPointInRect(point, bottomLeft)) return ResizeEdgeBottom | ResizeEdgeLeft;
+    if (NSPointInRect(point, bottomRight)) return ResizeEdgeBottom | ResizeEdgeRight;
+    if (NSPointInRect(point, topLeft)) return ResizeEdgeTop | ResizeEdgeLeft;
+    if (NSPointInRect(point, topRight)) return ResizeEdgeTop | ResizeEdgeRight;
+
+    CGFloat edgeLength = MAX(0.0, NSHeight(bounds) - 2.0 * cornerSize);
+    CGFloat horizontalLength = MAX(0.0, NSWidth(bounds) - 2.0 * cornerSize);
+    if (NSPointInRect(point, NSMakeRect(0, cornerSize, edgeWidth, edgeLength))) {
+        return ResizeEdgeLeft;
+    }
+    if (NSPointInRect(point, NSMakeRect(NSWidth(bounds) - edgeWidth, cornerSize,
+                                        edgeWidth, edgeLength))) {
+        return ResizeEdgeRight;
+    }
+    if (NSPointInRect(point, NSMakeRect(cornerSize, 0,
+                                        horizontalLength, edgeWidth))) {
+        return ResizeEdgeBottom;
+    }
+    if (NSPointInRect(point, NSMakeRect(cornerSize, NSHeight(bounds) - edgeWidth,
+                                        horizontalLength, edgeWidth))) {
+        return ResizeEdgeTop;
+    }
+    return ResizeEdgeNone;
 }
 
 - (void)resetCursorRects {
     [super resetCursorRects];
     NSRect bounds = self.bounds;
-    [self addCursorRect:NSMakeRect(0, kResizeHitWidth,
-                                   kResizeHitWidth, NSHeight(bounds) - 2 * kResizeHitWidth)
-                 cursor:NSCursor.resizeLeftRightCursor];
-    [self addCursorRect:NSMakeRect(NSWidth(bounds) - kResizeHitWidth, kResizeHitWidth,
-                                   kResizeHitWidth, NSHeight(bounds) - 2 * kResizeHitWidth)
-                 cursor:NSCursor.resizeLeftRightCursor];
-    [self addCursorRect:NSMakeRect(kResizeHitWidth, 0,
-                                   NSWidth(bounds) - 2 * kResizeHitWidth, kResizeHitWidth)
-                 cursor:NSCursor.resizeUpDownCursor];
-    [self addCursorRect:NSMakeRect(kResizeHitWidth, NSHeight(bounds) - kResizeHitWidth,
-                                   NSWidth(bounds) - 2 * kResizeHitWidth, kResizeHitWidth)
-                 cursor:NSCursor.resizeUpDownCursor];
+    CGFloat cornerSize = MIN(kCornerResizeHitSize,
+                             MIN(NSWidth(bounds), NSHeight(bounds)) / 2.0);
+    CGFloat edgeWidth = MIN(kEdgeResizeHitWidth, cornerSize);
+    CGFloat verticalLength = MAX(0.0, NSHeight(bounds) - 2.0 * cornerSize);
+    CGFloat horizontalLength = MAX(0.0, NSWidth(bounds) - 2.0 * cornerSize);
+
+    [self addCursorRect:NSMakeRect(0, 0, cornerSize, cornerSize)
+                 cursor:CursorForResizeEdge(ResizeEdgeBottom | ResizeEdgeLeft)];
+    [self addCursorRect:NSMakeRect(NSWidth(bounds) - cornerSize, 0,
+                                   cornerSize, cornerSize)
+                 cursor:CursorForResizeEdge(ResizeEdgeBottom | ResizeEdgeRight)];
+    [self addCursorRect:NSMakeRect(0, NSHeight(bounds) - cornerSize,
+                                   cornerSize, cornerSize)
+                 cursor:CursorForResizeEdge(ResizeEdgeTop | ResizeEdgeLeft)];
+    [self addCursorRect:NSMakeRect(NSWidth(bounds) - cornerSize,
+                                   NSHeight(bounds) - cornerSize,
+                                   cornerSize, cornerSize)
+                 cursor:CursorForResizeEdge(ResizeEdgeTop | ResizeEdgeRight)];
+    [self addCursorRect:NSMakeRect(0, cornerSize, edgeWidth, verticalLength)
+                 cursor:CursorForResizeEdge(ResizeEdgeLeft)];
+    [self addCursorRect:NSMakeRect(NSWidth(bounds) - edgeWidth, cornerSize,
+                                   edgeWidth, verticalLength)
+                 cursor:CursorForResizeEdge(ResizeEdgeRight)];
+    [self addCursorRect:NSMakeRect(cornerSize, 0, horizontalLength, edgeWidth)
+                 cursor:CursorForResizeEdge(ResizeEdgeBottom)];
+    [self addCursorRect:NSMakeRect(cornerSize, NSHeight(bounds) - edgeWidth,
+                                   horizontalLength, edgeWidth)
+                 cursor:CursorForResizeEdge(ResizeEdgeTop)];
 }
 
 @end
@@ -952,7 +1043,9 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         if ([self.mousePassthroughWindowIDs containsObject:windowKey]) {
             NSPoint windowPoint = [window convertPointFromScreen:mouseLocation];
             NSPoint viewPoint = [window.contentView convertPoint:windowPoint fromView:nil];
-            NSRect interactionRect = NSInsetRect(window.contentView.bounds, kResizeHitWidth, kResizeHitWidth);
+            NSRect interactionRect = NSInsetRect(window.contentView.bounds,
+                                                  kMousePassthroughInset,
+                                                  kMousePassthroughInset);
             shouldPassThrough = NSPointInRect(viewPoint, interactionRect);
         }
         window.ignoresMouseEvents = shouldPassThrough;
