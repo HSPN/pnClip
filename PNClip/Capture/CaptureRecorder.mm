@@ -1,8 +1,8 @@
 #import "CaptureRecorder.h"
 #import "../Support/PNClipConstants.h"
+#import "../Formats/AnimatedImageEncoder.h"
+#import "../Formats/GIF/GIFEncoder.h"
 #import <CoreImage/CoreImage.h>
-#import <ImageIO/ImageIO.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @implementation CaptureRecorder {
     SCStream *_stream;
@@ -15,6 +15,7 @@
     BOOL _stopRequested;
     BOOL _finishing;
     NSURL *_destinationFolder;
+    id<AnimatedImageEncoder> _animationEncoder;
 }
 
 - (instancetype)initWithWindowID:(CGWindowID)windowID destinationFolder:(NSURL *)folder {
@@ -25,6 +26,7 @@
         _frames = [NSMutableArray array];
         _ciContext = [CIContext contextWithOptions:nil];
         _captureQueue = dispatch_queue_create("com.example.PNClip.gif-capture", DISPATCH_QUEUE_SERIAL);
+        _animationEncoder = [[GIFEncoder alloc] init];
     }
     return self;
 }
@@ -114,34 +116,11 @@
     NSURL *folder = _destinationFolder ?: [NSFileManager.defaultManager
         URLsForDirectory:NSDesktopDirectory inDomains:NSUserDomainMask].firstObject;
     NSURL *destination = PNClipTimestampedFileURL(folder, @"PNClip Recording", @"gif");
-    CGImageDestinationRef gif = CGImageDestinationCreateWithURL(
-        (__bridge CFURLRef)destination, (__bridge CFStringRef)UTTypeGIF.identifier,
-        _frames.count, nullptr);
-    if (!gif) {
-        NSError *error = [NSError errorWithDomain:PNClipErrorDomain code:2
-            userInfo:@{NSLocalizedDescriptionKey: @"GIF 파일을 만들 수 없습니다."}];
-        [self finishWithURL:nil error:error];
-        return;
-    }
-    NSDictionary *properties = @{(id)kCGImagePropertyGIFDictionary:
-        @{(id)kCGImagePropertyGIFLoopCount: @0}};
-    CGImageDestinationSetProperties(gif, (__bridge CFDictionaryRef)properties);
-    NSUInteger index = 0;
-    for (id frame in _frames) {
-        NSTimeInterval delay = (index % 6 == 5) ? 0.05 : 0.04;
-        NSDictionary *frameProperties = @{(id)kCGImagePropertyGIFDictionary: @{
-            (id)kCGImagePropertyGIFDelayTime: @(delay),
-            (id)kCGImagePropertyGIFUnclampedDelayTime: @(delay)}};
-        CGImageDestinationAddImage(gif, (__bridge CGImageRef)frame,
-                                   (__bridge CFDictionaryRef)frameProperties);
-        index++;
-    }
-    BOOL succeeded = CGImageDestinationFinalize(gif);
-    CFRelease(gif);
-    if (!succeeded) {
-        NSError *error = [NSError errorWithDomain:PNClipErrorDomain code:3
-            userInfo:@{NSLocalizedDescriptionKey: @"GIF 저장에 실패했습니다."}];
-        [self finishWithURL:nil error:error];
+    NSError *encodingError = nil;
+    if (![_animationEncoder encodeFrames:_frames toURL:destination
+                               frameRate:PNClipRecordingFramesPerSecond
+                                   error:&encodingError]) {
+        [self finishWithURL:nil error:encodingError];
         return;
     }
     [self finishWithURL:destination error:nil];
