@@ -47,6 +47,10 @@ NSMenu *PNClipCreateMainMenu(AppDelegate *delegate) {
         action:@selector(chooseSaveLocation:) keyEquivalent:@""];
     saveLocation.target = delegate;
     [fileMenu addItem:saveLocation];
+    NSMenuItem *filenamePrefix = [[NSMenuItem alloc] initWithTitle:@"저장 파일명…"
+        action:@selector(changeFilenamePrefix:) keyEquivalent:@""];
+    filenamePrefix.target = delegate;
+    [fileMenu addItem:filenamePrefix];
     fileMenuItem.submenu = fileMenu;
 
     NSMenuItem *captureMenuItem = [[NSMenuItem alloc] init];

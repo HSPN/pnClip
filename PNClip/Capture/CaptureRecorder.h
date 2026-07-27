@@ -3,9 +3,11 @@
 @interface CaptureRecorder : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic, readonly) CGWindowID windowID;
 @property(nonatomic, readonly, getter=isRecording) BOOL recording;
+@property(nonatomic, copy) NSString *filenamePrefix;
 - (instancetype)initWithWindowID:(CGWindowID)windowID
                 destinationFolder:(NSURL *)destinationFolder
-                   maximumDuration:(NSTimeInterval)maximumDuration;
+                   maximumDuration:(NSTimeInterval)maximumDuration
+                     filenamePrefix:(NSString *)filenamePrefix;
 - (void)startWithFilter:(SCContentFilter *)filter
           configuration:(SCStreamConfiguration *)configuration
             stopHandler:(void (^)(void))stopHandler

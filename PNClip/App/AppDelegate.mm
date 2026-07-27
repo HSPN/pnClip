@@ -53,6 +53,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     self.recordingMouseInputEnabled = NO;
     self.recordingDuration = 5.0;
     self.recordingUsesNativeScale = NO;
+    self.filenamePrefix = [NSUserDefaults.standardUserDefaults
+        stringForKey:PNClipFilenamePrefixKey] ?: PNClipDefaultFilenamePrefix;
     self.elementDetector = [[AccessibilityElementDetector alloc] init];
     [self refreshLaunchAtLoginState];
     [self restoreSaveDirectory];
@@ -428,6 +430,44 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     }];
 }
 
+- (void)changeFilenamePrefix:(id)sender {
+    (void)sender;
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"저장 파일명";
+    alert.informativeText = @"모든 PNG와 GIF 파일명 앞에 붙을 접두사를 입력하세요.";
+    [alert addButtonWithTitle:@"저장"];
+    [alert addButtonWithTitle:@"취소"];
+
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
+    field.stringValue = self.filenamePrefix;
+    field.placeholderString = PNClipDefaultFilenamePrefix;
+    alert.accessoryView = field;
+    alert.window.initialFirstResponder = field;
+
+    NSModalResponse response = [alert runModal];
+    if (response != NSAlertFirstButtonReturn) return;
+
+    NSString *prefix = [field.stringValue stringByTrimmingCharactersInSet:
+        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSCharacterSet *invalidCharacters = [NSCharacterSet characterSetWithCharactersInString:@"/:\n\r"];
+    if (prefix.length == 0 || prefix.length > 120 ||
+        [prefix rangeOfCharacterFromSet:invalidCharacters].location != NSNotFound) {
+        [self showAlertWithTitle:@"파일명 변경 실패"
+                         message:@"접두사는 1~120자여야 하며 /, :, 줄바꿈을 포함할 수 없습니다."
+                          window:self.selectedWindow];
+        return;
+    }
+
+    self.filenamePrefix = prefix;
+    [NSUserDefaults.standardUserDefaults setObject:prefix forKey:PNClipFilenamePrefixKey];
+    for (CaptureRecorder *recorder in self.recorders.allValues) {
+        recorder.filenamePrefix = prefix;
+    }
+    for (RollingCaptureRecorder *recorder in self.rollingRecorders.allValues) {
+        recorder.filenamePrefix = prefix;
+    }
+}
+
 - (NSURL *)mostRecentCaptureURL {
     if (self.lastCreatedFileURL &&
         [NSFileManager.defaultManager fileExistsAtPath:self.lastCreatedFileURL.path]) {
@@ -444,8 +484,11 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     NSDate *newestDate = nil;
     for (NSURL *file in files) {
         NSString *name = file.lastPathComponent;
-        BOOL isCapture = ([name hasPrefix:@"PNClip "] && [name.pathExtension.lowercaseString isEqualToString:@"png"]) ||
-                         ([name hasPrefix:@"PNClip Recording "] && [name.pathExtension.lowercaseString isEqualToString:@"gif"]);
+        NSString *extension = name.pathExtension.lowercaseString;
+        BOOL supportedExtension = [extension isEqualToString:@"png"] ||
+                                  [extension isEqualToString:@"gif"];
+        BOOL isCapture = supportedExtension &&
+                         [name hasPrefix:[self.filenamePrefix stringByAppendingString:@" "]];
         if (!isCapture) continue;
         NSDate *date = nil;
         [file getResourceValue:&date forKey:NSURLContentModificationDateKey error:nil];
@@ -709,7 +752,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     CaptureRecorder *recorder = [[CaptureRecorder alloc]
         initWithWindowID:windowKey.unsignedIntValue
        destinationFolder:self.saveDirectoryURL
-          maximumDuration:self.recordingDuration];
+          maximumDuration:self.recordingDuration
+            filenamePrefix:self.filenamePrefix];
     self.recorders[windowKey] = recorder;
     if (self.recordingMouseInputEnabled) {
         if (![self installRecordingShortcutTapForWindow:targetWindow]) {
@@ -801,7 +845,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     NSScreen *screen = targetWindow.screen ?: NSScreen.mainScreen;
     BOOL usesNativeScale = self.recordingUsesNativeScale;
     RollingCaptureRecorder *recorder = [[RollingCaptureRecorder alloc]
-        initWithDestinationFolder:self.saveDirectoryURL];
+        initWithDestinationFolder:self.saveDirectoryURL
+                   filenamePrefix:self.filenamePrefix];
     self.rollingRecorders[windowKey] = recorder;
     view.rollingRecordingActive = YES;
     self.rollingRecordingItem.state = NSControlStateValueOn;
@@ -948,7 +993,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
 - (void)saveCapturedImage:(CGImageRef)image {
     NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithCGImage:image];
     NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-    NSURL *destination = PNClipTimestampedFileURL(self.saveDirectoryURL, @"PNClip", @"png");
+    NSURL *destination = PNClipTimestampedFileURL(self.saveDirectoryURL, self.filenamePrefix, @"png");
     NSError *error = nil;
     if (![png writeToURL:destination options:NSDataWritingAtomic error:&error]) {
         NSBeep();

@@ -34,6 +34,7 @@
 @property(nonatomic, strong) NSTimer *estimatedSizeTimer;
 @property(nonatomic, strong) NSURL *saveDirectoryURL;
 @property(nonatomic, strong) NSURL *lastCreatedFileURL;
+@property(nonatomic, copy) NSString *filenamePrefix;
 @property(nonatomic) BOOL accessingSecurityScopedDirectory;
 @property(nonatomic) NSTimeInterval recordingDuration;
 @property(nonatomic) BOOL recordingUsesNativeScale;
@@ -45,6 +46,7 @@
 - (void)closeAllWindows:(id)sender;
 - (void)statusItemClicked:(id)sender;
 - (void)chooseSaveLocation:(id)sender;
+- (void)changeFilenamePrefix:(id)sender;
 - (void)openMostRecentCapture:(id)sender;
 - (void)openSaveDirectory:(id)sender;
 - (void)capture:(id)sender;

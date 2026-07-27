@@ -17,11 +17,13 @@
     NSURL *_destinationFolder;
     id<AnimatedImageEncoder> _animationEncoder;
     NSTimeInterval _maximumDuration;
+    NSString *_filenamePrefix;
 }
 
 - (instancetype)initWithWindowID:(CGWindowID)windowID
                 destinationFolder:(NSURL *)folder
-                   maximumDuration:(NSTimeInterval)maximumDuration {
+                   maximumDuration:(NSTimeInterval)maximumDuration
+                     filenamePrefix:(NSString *)filenamePrefix {
     self = [super init];
     if (self) {
         _windowID = windowID;
@@ -31,12 +33,21 @@
         _captureQueue = dispatch_queue_create("com.example.PNClip.gif-capture", DISPATCH_QUEUE_SERIAL);
         _animationEncoder = [[GIFEncoder alloc] init];
         _maximumDuration = maximumDuration;
+        _filenamePrefix = [filenamePrefix copy];
     }
     return self;
 }
 
 - (BOOL)isRecording {
     @synchronized (self) { return !_finishing; }
+}
+
+- (void)setFilenamePrefix:(NSString *)filenamePrefix {
+    @synchronized (self) { _filenamePrefix = [filenamePrefix copy]; }
+}
+
+- (NSString *)filenamePrefix {
+    @synchronized (self) { return _filenamePrefix; }
 }
 
 - (void)startWithFilter:(SCContentFilter *)filter
@@ -130,7 +141,7 @@
     }
     NSURL *folder = _destinationFolder ?: [NSFileManager.defaultManager
         URLsForDirectory:NSDesktopDirectory inDomains:NSUserDomainMask].firstObject;
-    NSURL *destination = PNClipTimestampedFileURL(folder, @"PNClip Recording", @"gif");
+    NSURL *destination = PNClipTimestampedFileURL(folder, self.filenamePrefix, @"gif");
     NSError *encodingError = nil;
     NSMutableArray<NSNumber *> *durations = [NSMutableArray arrayWithCapacity:_frames.count];
     for (NSUInteger index = 0; index < _frames.count; index++) {

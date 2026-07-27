@@ -6,6 +6,8 @@ FOUNDATION_EXPORT const NSInteger PNClipRecordingFramesPerSecond;
 FOUNDATION_EXPORT const NSTimeInterval PNClipMaximumRecordingDuration;
 FOUNDATION_EXPORT const NSTimeInterval PNClipCaptureFlashDuration;
 FOUNDATION_EXPORT NSString *const PNClipSaveFolderBookmarkKey;
+FOUNDATION_EXPORT NSString *const PNClipFilenamePrefixKey;
+FOUNDATION_EXPORT NSString *const PNClipDefaultFilenamePrefix;
 FOUNDATION_EXPORT NSString *const PNClipErrorDomain;
 
 FOUNDATION_EXPORT NSRect PNClipRectBetweenPoints(NSPoint first, NSPoint second);

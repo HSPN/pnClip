@@ -2,7 +2,9 @@
 
 @interface RollingCaptureRecorder : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic, readonly, getter=isCapturing) BOOL capturing;
-- (instancetype)initWithDestinationFolder:(NSURL *)destinationFolder;
+@property(nonatomic, copy) NSString *filenamePrefix;
+- (instancetype)initWithDestinationFolder:(NSURL *)destinationFolder
+                            filenamePrefix:(NSString *)filenamePrefix;
 - (void)startWithFilter:(SCContentFilter *)filter
           configuration:(SCStreamConfiguration *)configuration
              completion:(void (^)(NSError *error))completion;

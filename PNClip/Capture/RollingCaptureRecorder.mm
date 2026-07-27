@@ -21,16 +21,19 @@ static const NSTimeInterval kRollingDuration = 10.0;
     dispatch_queue_t _encodingQueue;
     NSMutableArray<RollingFrame *> *_frames;
     NSURL *_destinationFolder;
+    NSString *_filenamePrefix;
     BOOL _capturing;
     BOOL _stopping;
     NSTimeInterval _latestSampleTime;
     NSTimeInterval _latestSampleUptime;
 }
 
-- (instancetype)initWithDestinationFolder:(NSURL *)destinationFolder {
+- (instancetype)initWithDestinationFolder:(NSURL *)destinationFolder
+                            filenamePrefix:(NSString *)filenamePrefix {
     self = [super init];
     if (self) {
         _destinationFolder = destinationFolder;
+        _filenamePrefix = [filenamePrefix copy];
         _ciContext = [CIContext contextWithOptions:nil];
         _frames = [NSMutableArray array];
         _captureQueue = dispatch_queue_create("com.example.PNClip.rolling-capture", DISPATCH_QUEUE_SERIAL);
@@ -40,6 +43,14 @@ static const NSTimeInterval kRollingDuration = 10.0;
 }
 
 - (BOOL)isCapturing { @synchronized (self) { return _capturing && !_stopping; } }
+
+- (void)setFilenamePrefix:(NSString *)filenamePrefix {
+    @synchronized (self) { _filenamePrefix = [filenamePrefix copy]; }
+}
+
+- (NSString *)filenamePrefix {
+    @synchronized (self) { return _filenamePrefix; }
+}
 
 - (void)startWithFilter:(SCContentFilter *)filter
           configuration:(SCStreamConfiguration *)configuration
@@ -124,6 +135,7 @@ static const NSTimeInterval kRollingDuration = 10.0;
             self->_frames.firstObject.startTime = cutoff;
         }
         NSArray<RollingFrame *> *snapshot = self->_frames.copy;
+        NSString *filenamePrefix = self.filenamePrefix;
         dispatch_async(self->_encodingQueue, ^{
             NSMutableArray *images = [NSMutableArray arrayWithCapacity:snapshot.count];
             NSMutableArray<NSNumber *> *durations = [NSMutableArray arrayWithCapacity:snapshot.count];
@@ -133,7 +145,7 @@ static const NSTimeInterval kRollingDuration = 10.0;
             }
             NSURL *folder = self->_destinationFolder ?: [NSFileManager.defaultManager
                 URLsForDirectory:NSDesktopDirectory inDomains:NSUserDomainMask].firstObject;
-            NSURL *destination = PNClipTimestampedFileURL(folder, @"PNClip Rolling", @"gif");
+            NSURL *destination = PNClipTimestampedFileURL(folder, filenamePrefix, @"gif");
             NSError *error = nil;
             GIFEncoder *encoder = [[GIFEncoder alloc] init];
             BOOL success = [encoder encodeFrames:images frameDurations:durations
