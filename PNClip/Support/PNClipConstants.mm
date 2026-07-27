@@ -8,6 +8,7 @@ const NSTimeInterval PNClipCaptureFlashDuration = 0.2;
 NSString *const PNClipSaveFolderBookmarkKey = @"SaveFolderBookmark";
 NSString *const PNClipFilenamePrefixKey = @"FilenamePrefix";
 NSString *const PNClipDefaultFilenamePrefix = @"PNClip";
+NSString *const PNClipCaptureFormatKey = @"CaptureFormat";
 NSString *const PNClipErrorDomain = @"PNClip";
 
 NSRect PNClipRectBetweenPoints(NSPoint first, NSPoint second) {

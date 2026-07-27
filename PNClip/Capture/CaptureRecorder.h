@@ -1,4 +1,5 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import "../Formats/CaptureFormat.h"
 
 @interface CaptureRecorder : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic, readonly) CGWindowID windowID;
@@ -7,7 +8,8 @@
 - (instancetype)initWithWindowID:(CGWindowID)windowID
                 destinationFolder:(NSURL *)destinationFolder
                    maximumDuration:(NSTimeInterval)maximumDuration
-                     filenamePrefix:(NSString *)filenamePrefix;
+                     filenamePrefix:(NSString *)filenamePrefix
+                       captureFormat:(PNClipCaptureFormat)captureFormat;
 - (void)startWithFilter:(SCContentFilter *)filter
           configuration:(SCStreamConfiguration *)configuration
             stopHandler:(void (^)(void))stopHandler

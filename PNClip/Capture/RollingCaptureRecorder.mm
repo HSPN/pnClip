@@ -1,6 +1,6 @@
 #import "RollingCaptureRecorder.h"
 #import "../Formats/AnimatedImageEncoder.h"
-#import "../Formats/GIF/GIFEncoder.h"
+#import "../Formats/CaptureFormat.h"
 #import "../Support/PNClipConstants.h"
 #import <CoreImage/CoreImage.h>
 
@@ -22,6 +22,7 @@ static const NSTimeInterval kRollingDuration = 10.0;
     NSMutableArray<RollingFrame *> *_frames;
     NSURL *_destinationFolder;
     NSString *_filenamePrefix;
+    PNClipCaptureFormat _captureFormat;
     BOOL _capturing;
     BOOL _stopping;
     NSTimeInterval _latestSampleTime;
@@ -29,11 +30,13 @@ static const NSTimeInterval kRollingDuration = 10.0;
 }
 
 - (instancetype)initWithDestinationFolder:(NSURL *)destinationFolder
-                            filenamePrefix:(NSString *)filenamePrefix {
+                            filenamePrefix:(NSString *)filenamePrefix
+                              captureFormat:(PNClipCaptureFormat)captureFormat {
     self = [super init];
     if (self) {
         _destinationFolder = destinationFolder;
         _filenamePrefix = [filenamePrefix copy];
+        _captureFormat = captureFormat;
         _ciContext = [CIContext contextWithOptions:nil];
         _frames = [NSMutableArray array];
         _captureQueue = dispatch_queue_create("com.example.PNClip.rolling-capture", DISPATCH_QUEUE_SERIAL);
@@ -136,6 +139,7 @@ static const NSTimeInterval kRollingDuration = 10.0;
         }
         NSArray<RollingFrame *> *snapshot = self->_frames.copy;
         NSString *filenamePrefix = self.filenamePrefix;
+        PNClipCaptureFormat captureFormat = self->_captureFormat;
         dispatch_async(self->_encodingQueue, ^{
             NSMutableArray *images = [NSMutableArray arrayWithCapacity:snapshot.count];
             NSMutableArray<NSNumber *> *durations = [NSMutableArray arrayWithCapacity:snapshot.count];
@@ -145,9 +149,10 @@ static const NSTimeInterval kRollingDuration = 10.0;
             }
             NSURL *folder = self->_destinationFolder ?: [NSFileManager.defaultManager
                 URLsForDirectory:NSDesktopDirectory inDomains:NSUserDomainMask].firstObject;
-            NSURL *destination = PNClipTimestampedFileURL(folder, filenamePrefix, @"gif");
+            NSURL *destination = PNClipTimestampedFileURL(folder, filenamePrefix,
+                                                           PNClipAnimatedImageExtension(captureFormat));
             NSError *error = nil;
-            GIFEncoder *encoder = [[GIFEncoder alloc] init];
+            id<AnimatedImageEncoder> encoder = PNClipCreateAnimatedImageEncoder(captureFormat);
             BOOL success = [encoder encodeFrames:images frameDurations:durations
                                            toURL:destination error:&error];
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -175,7 +180,8 @@ static const NSTimeInterval kRollingDuration = 10.0;
         // Measured screen-content GIFs from the native encoder average near
         // 0.37 encoded bytes per changed pixel. Static frames remain cheap
         // because idle samples are represented as duration, not new images.
-        result = (unsigned long long)(pixelsPerFrame * uniqueFrames * 0.37 + 1024.0);
+        double bytesPerPixel = self->_captureFormat == PNClipCaptureFormatWebP ? 0.06 : 0.37;
+        result = (unsigned long long)(pixelsPerFrame * uniqueFrames * bytesPerPixel + 1024.0);
     });
     return result;
 }

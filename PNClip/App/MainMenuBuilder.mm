@@ -13,6 +13,11 @@ NSMenu *PNClipCreateMainMenu(AppDelegate *delegate) {
     delegate.launchAtLoginItem = launchAtLogin;
     [appMenu addItem:launchAtLogin];
     [appMenu addItem:NSMenuItem.separatorItem];
+    NSMenuItem *licenses = [[NSMenuItem alloc] initWithTitle:@"오픈 소스 라이선스…"
+        action:@selector(showOpenSourceLicenses:) keyEquivalent:@""];
+    licenses.target = delegate;
+    [appMenu addItem:licenses];
+    [appMenu addItem:NSMenuItem.separatorItem];
     [appMenu addItemWithTitle:@"PNClip 종료" action:@selector(terminate:) keyEquivalent:@"q"];
     appMenuItem.submenu = appMenu;
 
@@ -51,6 +56,25 @@ NSMenu *PNClipCreateMainMenu(AppDelegate *delegate) {
         action:@selector(changeFilenamePrefix:) keyEquivalent:@""];
     filenamePrefix.target = delegate;
     [fileMenu addItem:filenamePrefix];
+    NSMenuItem *formatItem = [[NSMenuItem alloc] initWithTitle:@"파일 형식"
+        action:nil keyEquivalent:@""];
+    NSMenu *formatMenu = [[NSMenu alloc] initWithTitle:@"파일 형식"];
+    formatMenu.autoenablesItems = NO;
+    NSMenuItem *pngGIF = [[NSMenuItem alloc] initWithTitle:@"PNG / GIF"
+        action:@selector(selectCaptureFormat:) keyEquivalent:@""];
+    pngGIF.tag = PNClipCaptureFormatPNGGIF;
+    pngGIF.target = delegate;
+    pngGIF.state = NSControlStateValueOn;
+    delegate.pngGIFFormatItem = pngGIF;
+    [formatMenu addItem:pngGIF];
+    NSMenuItem *webP = [[NSMenuItem alloc] initWithTitle:@"WebP"
+        action:@selector(selectCaptureFormat:) keyEquivalent:@""];
+    webP.tag = PNClipCaptureFormatWebP;
+    webP.target = delegate;
+    delegate.webPFormatItem = webP;
+    [formatMenu addItem:webP];
+    formatItem.submenu = formatMenu;
+    [fileMenu addItem:formatItem];
     fileMenuItem.submenu = fileMenu;
 
     NSMenuItem *captureMenuItem = [[NSMenuItem alloc] init];
@@ -64,7 +88,7 @@ NSMenu *PNClipCreateMainMenu(AppDelegate *delegate) {
         action:@selector(toggleRecording:) keyEquivalent:@"r"];
     record.target = delegate;
     [captureMenu addItem:record];
-    NSMenuItem *rolling = [[NSMenuItem alloc] initWithTitle:@"최근 GIF 상시 녹화"
+    NSMenuItem *rolling = [[NSMenuItem alloc] initWithTitle:@"최근 구간 상시 녹화"
         action:@selector(toggleRollingRecording:) keyEquivalent:@"r"];
     rolling.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
     rolling.target = delegate;
@@ -72,9 +96,9 @@ NSMenu *PNClipCreateMainMenu(AppDelegate *delegate) {
     [captureMenu addItem:rolling];
     [captureMenu addItem:NSMenuItem.separatorItem];
 
-    NSMenuItem *durationItem = [[NSMenuItem alloc] initWithTitle:@"GIF 길이"
+    NSMenuItem *durationItem = [[NSMenuItem alloc] initWithTitle:@"녹화 길이"
         action:nil keyEquivalent:@""];
-    NSMenu *durationMenu = [[NSMenu alloc] initWithTitle:@"GIF 길이"];
+    NSMenu *durationMenu = [[NSMenu alloc] initWithTitle:@"녹화 길이"];
     durationMenu.autoenablesItems = NO;
     NSMenuItem *fiveSeconds = [[NSMenuItem alloc] initWithTitle:@"5초"
         action:@selector(selectRecordingDuration:) keyEquivalent:@""];
@@ -92,9 +116,9 @@ NSMenu *PNClipCreateMainMenu(AppDelegate *delegate) {
     durationItem.submenu = durationMenu;
     [captureMenu addItem:durationItem];
 
-    NSMenuItem *scaleItem = [[NSMenuItem alloc] initWithTitle:@"GIF 해상도"
+    NSMenuItem *scaleItem = [[NSMenuItem alloc] initWithTitle:@"녹화 해상도"
         action:nil keyEquivalent:@""];
-    NSMenu *scaleMenu = [[NSMenu alloc] initWithTitle:@"GIF 해상도"];
+    NSMenu *scaleMenu = [[NSMenu alloc] initWithTitle:@"녹화 해상도"];
     scaleMenu.autoenablesItems = NO;
     NSMenuItem *standardScale = [[NSMenuItem alloc] initWithTitle:@"일반"
         action:@selector(selectRecordingScale:) keyEquivalent:@""];
@@ -142,7 +166,7 @@ NSMenu *PNClipCreateMainMenu(AppDelegate *delegate) {
     [viewMenu addItem:sliderItem];
     viewMenuItem.submenu = viewMenu;
 
-    NSMenuItem *estimatedSize = [[NSMenuItem alloc] initWithTitle:@"예상 GIF: 계산 중…"
+    NSMenuItem *estimatedSize = [[NSMenuItem alloc] initWithTitle:@"예상 녹화: 계산 중…"
         action:nil keyEquivalent:@""];
     estimatedSize.submenu = [[NSMenu alloc] initWithTitle:estimatedSize.title];
     estimatedSize.enabled = NO;

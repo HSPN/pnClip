@@ -55,6 +55,15 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     self.recordingUsesNativeScale = NO;
     self.filenamePrefix = [NSUserDefaults.standardUserDefaults
         stringForKey:PNClipFilenamePrefixKey] ?: PNClipDefaultFilenamePrefix;
+    self.captureFormat = (PNClipCaptureFormat)[NSUserDefaults.standardUserDefaults
+        integerForKey:PNClipCaptureFormatKey];
+    if (self.captureFormat != PNClipCaptureFormatWebP) {
+        self.captureFormat = PNClipCaptureFormatPNGGIF;
+    }
+    self.pngGIFFormatItem.state = self.captureFormat == PNClipCaptureFormatPNGGIF
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    self.webPFormatItem.state = self.captureFormat == PNClipCaptureFormatWebP
+        ? NSControlStateValueOn : NSControlStateValueOff;
     self.elementDetector = [[AccessibilityElementDetector alloc] init];
     [self refreshLaunchAtLoginState];
     [self restoreSaveDirectory];
@@ -160,6 +169,57 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     } else if (service.status == SMAppServiceStatusRequiresApproval) {
         [SMAppService openSystemSettingsLoginItems];
     }
+}
+
+- (void)showOpenSourceLicenses:(id)sender {
+    (void)sender;
+    if (!self.licenseWindow) {
+        NSBundle *bundle = NSBundle.mainBundle;
+        NSString *licensePath = [bundle pathForResource:@"libwebp-COPYING" ofType:@"txt"];
+        NSString *patentPath = [bundle pathForResource:@"libwebp-PATENTS" ofType:@"txt"];
+        NSString *license = licensePath
+            ? [NSString stringWithContentsOfFile:licensePath encoding:NSUTF8StringEncoding error:nil]
+            : nil;
+        NSString *patents = patentPath
+            ? [NSString stringWithContentsOfFile:patentPath encoding:NSUTF8StringEncoding error:nil]
+            : nil;
+        NSString *contents = [NSString stringWithFormat:
+            @"libwebp 1.6.0\nCopyright (c) 2010, Google Inc.\n\n%@\n\n%@",
+            license ?: @"라이선스 파일을 불러오지 못했습니다.",
+            patents ?: @"특허 고지 파일을 불러오지 못했습니다."];
+
+        NSWindow *window = [[NSWindow alloc]
+            initWithContentRect:NSMakeRect(0, 0, 680, 500)
+                      styleMask:NSWindowStyleMaskTitled |
+                                NSWindowStyleMaskClosable |
+                                NSWindowStyleMaskResizable
+                        backing:NSBackingStoreBuffered
+                          defer:NO];
+        window.title = @"오픈 소스 라이선스";
+        window.minSize = NSMakeSize(480, 320);
+        NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:window.contentView.bounds];
+        scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        scrollView.hasVerticalScroller = YES;
+        scrollView.hasHorizontalScroller = NO;
+        scrollView.borderType = NSBezelBorder;
+        NSTextView *textView = [[NSTextView alloc] initWithFrame:scrollView.contentView.bounds];
+        textView.editable = NO;
+        textView.selectable = YES;
+        textView.richText = NO;
+        textView.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+        textView.textContainerInset = NSMakeSize(12, 12);
+        textView.string = contents;
+        textView.autoresizingMask = NSViewWidthSizable;
+        textView.verticallyResizable = YES;
+        textView.horizontallyResizable = NO;
+        textView.textContainer.widthTracksTextView = YES;
+        scrollView.documentView = textView;
+        window.contentView = scrollView;
+        [window center];
+        self.licenseWindow = window;
+    }
+    [NSApp activateIgnoringOtherApps:YES];
+    [self.licenseWindow makeKeyAndOrderFront:nil];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
@@ -434,7 +494,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     (void)sender;
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = @"저장 파일명";
-    alert.informativeText = @"모든 PNG와 GIF 파일명 앞에 붙을 접두사를 입력하세요.";
+    alert.informativeText = @"모든 캡처 및 녹화 파일명 앞에 붙을 접두사를 입력하세요.";
     [alert addButtonWithTitle:@"저장"];
     [alert addButtonWithTitle:@"취소"];
 
@@ -468,6 +528,18 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     }
 }
 
+- (void)selectCaptureFormat:(NSMenuItem *)sender {
+    if (!self.pngGIFFormatItem.enabled) return;
+    self.captureFormat = sender.tag == PNClipCaptureFormatWebP
+        ? PNClipCaptureFormatWebP : PNClipCaptureFormatPNGGIF;
+    self.pngGIFFormatItem.state = self.captureFormat == PNClipCaptureFormatPNGGIF
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    self.webPFormatItem.state = self.captureFormat == PNClipCaptureFormatWebP
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    [NSUserDefaults.standardUserDefaults setInteger:self.captureFormat
+                                             forKey:PNClipCaptureFormatKey];
+}
+
 - (NSURL *)mostRecentCaptureURL {
     if (self.lastCreatedFileURL &&
         [NSFileManager.defaultManager fileExistsAtPath:self.lastCreatedFileURL.path]) {
@@ -486,7 +558,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
         NSString *name = file.lastPathComponent;
         NSString *extension = name.pathExtension.lowercaseString;
         BOOL supportedExtension = [extension isEqualToString:@"png"] ||
-                                  [extension isEqualToString:@"gif"];
+                                  [extension isEqualToString:@"gif"] ||
+                                  [extension isEqualToString:@"webp"];
         BOOL isCapture = supportedExtension &&
                          [name hasPrefix:[self.filenamePrefix stringByAppendingString:@" "]];
         if (!isCapture) continue;
@@ -513,11 +586,12 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     [NSWorkspace.sharedWorkspace openURL:self.saveDirectoryURL];
 }
 
-- (void)copyGIFAtURLToPasteboard:(NSURL *)fileURL {
-    NSData *gifData = [NSData dataWithContentsOfURL:fileURL];
-    if (!gifData) return;
+- (void)copyAnimatedImageAtURLToPasteboard:(NSURL *)fileURL {
+    NSData *imageData = [NSData dataWithContentsOfURL:fileURL];
+    if (!imageData) return;
+    UTType *type = [UTType typeWithFilenameExtension:fileURL.pathExtension];
     NSPasteboardItem *item = [[NSPasteboardItem alloc] init];
-    [item setData:gifData forType:(NSPasteboardType)UTTypeGIF.identifier];
+    if (type) [item setData:imageData forType:(NSPasteboardType)type.identifier];
     [item setString:fileURL.absoluteString forType:NSPasteboardTypeFileURL];
     NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
     [pasteboard clearContents];
@@ -753,7 +827,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
         initWithWindowID:windowKey.unsignedIntValue
        destinationFolder:self.saveDirectoryURL
           maximumDuration:self.recordingDuration
-            filenamePrefix:self.filenamePrefix];
+            filenamePrefix:self.filenamePrefix
+              captureFormat:self.captureFormat];
     self.recorders[windowKey] = recorder;
     if (self.recordingMouseInputEnabled) {
         if (![self installRecordingShortcutTapForWindow:targetWindow]) {
@@ -812,7 +887,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
                                             window:weakWindow];
             } else if (fileURL) {
                 completionSelf.lastCreatedFileURL = fileURL;
-                [completionSelf copyGIFAtURLToPasteboard:fileURL];
+                [completionSelf copyAnimatedImageAtURLToPasteboard:fileURL];
             }
         }];
     }];
@@ -834,7 +909,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     if (self.recorders[windowKey]) {
         NSBeep();
         [self showAlertWithTitle:@"상시 녹화 시작 불가"
-                         message:@"일반 GIF 녹화를 먼저 중지해 주세요."
+                         message:@"일반 녹화를 먼저 중지해 주세요."
                           window:targetWindow];
         return;
     }
@@ -846,7 +921,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     BOOL usesNativeScale = self.recordingUsesNativeScale;
     RollingCaptureRecorder *recorder = [[RollingCaptureRecorder alloc]
         initWithDestinationFolder:self.saveDirectoryURL
-                   filenamePrefix:self.filenamePrefix];
+                   filenamePrefix:self.filenamePrefix
+                     captureFormat:self.captureFormat];
     self.rollingRecorders[windowKey] = recorder;
     view.rollingRecordingActive = YES;
     self.rollingRecordingItem.state = NSControlStateValueOn;
@@ -907,12 +983,12 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
         if (!strongSelf) return;
         if (error) {
             NSBeep();
-            [strongSelf showAlertWithTitle:@"최근 GIF 저장 실패"
+            [strongSelf showAlertWithTitle:@"최근 구간 저장 실패"
                                    message:error.localizedDescription
                                     window:weakWindow];
         } else if (fileURL) {
             strongSelf.lastCreatedFileURL = fileURL;
-            [strongSelf copyGIFAtURLToPasteboard:fileURL];
+            [strongSelf copyAnimatedImageAtURLToPasteboard:fileURL];
         }
     }];
 }
@@ -952,6 +1028,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     self.tenSecondItem.enabled = !hasActiveRecording;
     self.standardScaleItem.enabled = !hasActiveRecording;
     self.retinaScaleItem.enabled = !hasActiveRecording;
+    self.pngGIFFormatItem.enabled = !hasActiveRecording;
+    self.webPFormatItem.enabled = !hasActiveRecording;
     if (!hasActiveRecording) return;
 
     NSWindow *window = [self activeCaptureWindow];
@@ -977,7 +1055,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     unsigned long long bytes = rolling
         ? [rolling estimatedGIFSizeForDuration:self.recordingDuration]
         : [recorder estimatedGIFSize];
-    NSString *title = [NSString stringWithFormat:@"예상 GIF: %.1f MB",
+    NSString *formatName = self.captureFormat == PNClipCaptureFormatWebP ? @"WebP" : @"GIF";
+    NSString *title = [NSString stringWithFormat:@"예상 %@: %.1f MB", formatName,
         bytes / (1024.0 * 1024.0)];
     self.estimatedSizeItem.title = title;
     self.estimatedSizeItem.submenu.title = title;
@@ -991,11 +1070,12 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
 }
 
 - (void)saveCapturedImage:(CGImageRef)image {
-    NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithCGImage:image];
-    NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-    NSURL *destination = PNClipTimestampedFileURL(self.saveDirectoryURL, self.filenamePrefix, @"png");
     NSError *error = nil;
-    if (![png writeToURL:destination options:NSDataWritingAtomic error:&error]) {
+    NSData *imageData = PNClipEncodeStillImage(image, self.captureFormat, &error);
+    NSString *extension = PNClipStillImageExtension(self.captureFormat);
+    NSURL *destination = PNClipTimestampedFileURL(self.saveDirectoryURL,
+                                                   self.filenamePrefix, extension);
+    if (!imageData || ![imageData writeToURL:destination options:NSDataWritingAtomic error:&error]) {
         NSBeep();
         [self showAlertWithTitle:@"저장 실패"
                          message:error.localizedDescription
@@ -1005,7 +1085,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
 
     self.lastCreatedFileURL = destination;
     NSPasteboardItem *item = [[NSPasteboardItem alloc] init];
-    [item setData:png forType:NSPasteboardTypePNG];
+    UTType *type = [UTType typeWithFilenameExtension:extension];
+    if (type) [item setData:imageData forType:(NSPasteboardType)type.identifier];
     NSImage *pasteImage = [[NSImage alloc] initWithCGImage:image size:NSZeroSize];
     NSData *tiff = pasteImage.TIFFRepresentation;
     if (tiff) [item setData:tiff forType:NSPasteboardTypeTIFF];

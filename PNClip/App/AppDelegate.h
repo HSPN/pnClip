@@ -11,6 +11,7 @@
 @property(nonatomic, strong) NSSlider *transparencySlider;
 @property(nonatomic, weak) NSWindow *selectedWindow;
 @property(nonatomic, strong) NSStatusItem *statusItem;
+@property(nonatomic, strong) NSWindow *licenseWindow;
 @property(nonatomic, strong) NSMutableArray<SelectionWindow *> *selectionWindows;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, CaptureRecorder *> *recorders;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, RollingCaptureRecorder *> *rollingRecorders;
@@ -24,6 +25,8 @@
 @property(nonatomic, strong) NSMenuItem *tenSecondItem;
 @property(nonatomic, strong) NSMenuItem *standardScaleItem;
 @property(nonatomic, strong) NSMenuItem *retinaScaleItem;
+@property(nonatomic, strong) NSMenuItem *pngGIFFormatItem;
+@property(nonatomic, strong) NSMenuItem *webPFormatItem;
 @property(nonatomic, strong) NSMenuItem *estimatedSizeItem;
 @property(nonatomic, strong) NSMenuItem *launchAtLoginItem;
 @property(nonatomic) BOOL recordingMouseInputEnabled;
@@ -35,6 +38,7 @@
 @property(nonatomic, strong) NSURL *saveDirectoryURL;
 @property(nonatomic, strong) NSURL *lastCreatedFileURL;
 @property(nonatomic, copy) NSString *filenamePrefix;
+@property(nonatomic) PNClipCaptureFormat captureFormat;
 @property(nonatomic) BOOL accessingSecurityScopedDirectory;
 @property(nonatomic) NSTimeInterval recordingDuration;
 @property(nonatomic) BOOL recordingUsesNativeScale;
@@ -47,6 +51,8 @@
 - (void)statusItemClicked:(id)sender;
 - (void)chooseSaveLocation:(id)sender;
 - (void)changeFilenamePrefix:(id)sender;
+- (void)selectCaptureFormat:(NSMenuItem *)sender;
+- (void)showOpenSourceLicenses:(id)sender;
 - (void)openMostRecentCapture:(id)sender;
 - (void)openSaveDirectory:(id)sender;
 - (void)capture:(id)sender;
