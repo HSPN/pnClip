@@ -43,6 +43,11 @@ int main(void) {
         }
         CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)url, nullptr);
         if (!source) return 2;
+        NSDictionary *containerProperties = CFBridgingRelease(
+            CGImageSourceCopyProperties(source, nullptr));
+        NSDictionary *containerGIFProperties =
+            containerProperties[(id)kCGImagePropertyGIFDictionary];
+        NSNumber *loopCount = containerGIFProperties[(id)kCGImagePropertyGIFLoopCount];
         BOOL validType = [(__bridge NSString *)CGImageSourceGetType(source)
             isEqualToString:UTTypeGIF.identifier];
         size_t count = CGImageSourceGetCount(source);
@@ -60,9 +65,18 @@ int main(void) {
         }
         CFRelease(source);
         BOOL validDuration = fabs(decodedDuration - 0.5) < 0.02;
-        if (!validType || count != frames.count || !validSize || !validDuration) {
-            NSLog(@"invalid GIF: type=%d count=%zu size=%d duration=%.3f",
-                  validType, count, validSize, decodedDuration);
+        NSData *encodedData = [NSData dataWithContentsOfURL:url];
+        const uint8_t infiniteLoopExtension[] = {
+            0x21, 0xFF, 0x0B, 'N','E','T','S','C','A','P','E','2','.','0',
+            0x03, 0x01, 0x00, 0x00, 0x00};
+        NSData *extensionData = [NSData dataWithBytes:infiniteLoopExtension
+                                               length:sizeof(infiniteLoopExtension)];
+        BOOL validLoop = loopCount && loopCount.integerValue == 0 &&
+            [encodedData rangeOfData:extensionData options:0
+                               range:NSMakeRange(0, encodedData.length)].location != NSNotFound;
+        if (!validType || count != frames.count || !validSize || !validDuration || !validLoop) {
+            NSLog(@"invalid GIF: type=%d count=%zu size=%d duration=%.3f loop=%@",
+                  validType, count, validSize, decodedDuration, loopCount);
             return 3;
         }
         NSLog(@"GIF encoder test passed: %@ (%zu frames)", url.path, count);

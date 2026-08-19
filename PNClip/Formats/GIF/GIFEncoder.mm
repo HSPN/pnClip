@@ -16,6 +16,15 @@ static void AppendUInt16(NSMutableData *data, uint16_t value) {
     [data appendBytes:bytes length:2];
 }
 
+static void AppendInfiniteLoopExtension(NSMutableData *data) {
+    // NETSCAPE loop count 0 is the interoperable GIF89a representation of
+    // infinite playback. Every animated GIF emitted by PNClip includes it.
+    const uint8_t extension[] = {
+        0x21, 0xFF, 0x0B, 'N','E','T','S','C','A','P','E','2','.','0',
+        0x03, 0x01, 0x00, 0x00, 0x00};
+    [data appendBytes:extension length:sizeof(extension)];
+}
+
 static NSMutableData *CopyRGBABytes(CGImageRef image) {
     size_t width = CGImageGetWidth(image);
     size_t height = CGImageGetHeight(image);
@@ -91,10 +100,7 @@ static NSError *GIFError(NSInteger code, NSString *message) {
     AppendByte(gif, 0);
     [gif appendData:palette];
 
-    const uint8_t loopExtension[] = {
-        0x21, 0xFF, 0x0B, 'N','E','T','S','C','A','P','E','2','.','0',
-        0x03, 0x01, 0x00, 0x00, 0x00};
-    [gif appendBytes:loopExtension length:sizeof(loopExtension)];
+    AppendInfiniteLoopExtension(gif);
 
     NSInteger previousTick = 0;
     NSTimeInterval elapsed = 0;

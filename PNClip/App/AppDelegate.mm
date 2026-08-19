@@ -125,6 +125,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
         if (weakSelf.mousePassthroughWindowIDs.count > 0) {
             [weakSelf updateMousePassthrough];
         }
+        [weakSelf updateSourceTrackedWindows];
     }];
     self.estimatedSizeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
                                                               target:self
@@ -294,6 +295,31 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     }];
 }
 
+- (void)loadContentFilterForCaptureWindow:(CaptureWindow *)captureWindow
+                                   screen:(NSScreen *)screen
+                               completion:(void (^)(SCContentFilter *, NSError *))completion {
+    if (captureWindow.sourceWindowID == 0) {
+        [self loadContentFilterForScreen:screen completion:completion];
+        return;
+    }
+    CGWindowID sourceWindowID = captureWindow.sourceWindowID;
+    [SCShareableContent getShareableContentExcludingDesktopWindows:NO
+                                                onScreenWindowsOnly:YES
+                                                 completionHandler:^(SCShareableContent *content, NSError *error) {
+        if (error) { completion(nil, error); return; }
+        for (SCWindow *window in content.windows) {
+            if (window.windowID == sourceWindowID) {
+                completion([[SCContentFilter alloc] initWithDesktopIndependentWindow:window], nil);
+                return;
+            }
+        }
+        NSError *missingError = [NSError errorWithDomain:PNClipErrorDomain code:5 userInfo:@{
+            NSLocalizedDescriptionKey: @"선택한 원본 창을 찾을 수 없습니다."
+        }];
+        completion(nil, missingError);
+    }];
+}
+
 - (SCStreamConfiguration *)configurationForRect:(NSRect)rect
                                         onScreen:(NSScreen *)screen
                                   usesNativeScale:(BOOL)usesNativeScale {
@@ -306,6 +332,17 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     configuration.width = (size_t)round(NSWidth(rect) * scale);
     configuration.height = (size_t)round(NSHeight(rect) * scale);
     configuration.showsCursor = NO;
+    return configuration;
+}
+
+- (SCStreamConfiguration *)configurationForCaptureWindow:(CaptureWindow *)window
+                                                      rect:(NSRect)rect
+                                                    screen:(NSScreen *)screen
+                                           usesNativeScale:(BOOL)usesNativeScale {
+    SCStreamConfiguration *configuration = [self configurationForRect:rect
+                                                               onScreen:screen
+                                                         usesNativeScale:usesNativeScale];
+    if (window.sourceWindowID != 0) configuration.sourceRect = window.sourceRectInWindow;
     return configuration;
 }
 
@@ -418,6 +455,40 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
             shouldPassThrough = NSPointInRect(viewPoint, interactionRect);
         }
         window.ignoresMouseEvents = shouldPassThrough;
+    }
+}
+
+- (void)updateSourceTrackedWindows {
+    NSMutableDictionary<NSNumber *, NSDictionary *> *sourceInfo = [NSMutableDictionary dictionary];
+    BOOL hasTrackedWindow = NO;
+    for (CaptureWindow *window in self.windows) {
+        if ([window isKindOfClass:CaptureWindow.class] && window.sourceWindowID != 0) {
+            hasTrackedWindow = YES;
+            break;
+        }
+    }
+    if (!hasTrackedWindow) return;
+
+    NSArray<NSDictionary *> *windowInfo = CFBridgingRelease(
+        CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID));
+    for (NSDictionary *info in windowInfo) {
+        NSNumber *windowID = info[(id)kCGWindowNumber];
+        if (windowID) sourceInfo[windowID] = info;
+    }
+    CGFloat primaryTop = NSMaxY(NSScreen.screens.firstObject.frame);
+    for (CaptureWindow *window in self.windows) {
+        if (![window isKindOfClass:CaptureWindow.class] || window.sourceWindowID == 0) continue;
+        NSDictionary *info = sourceInfo[@(window.sourceWindowID)];
+        CGRect bounds = CGRectZero;
+        if (!info || !CGRectMakeWithDictionaryRepresentation(
+                (__bridge CFDictionaryRef)info[(id)kCGWindowBounds], &bounds)) continue;
+        window.sourceWindowBounds = bounds;
+        CGRect crop = window.sourceRectInWindow;
+        NSRect selectedFrame = NSMakeRect(CGRectGetMinX(bounds) + CGRectGetMinX(crop),
+                                          primaryTop - CGRectGetMinY(bounds) - CGRectGetMaxY(crop),
+                                          CGRectGetWidth(crop), CGRectGetHeight(crop));
+        NSRect trackedFrame = NSInsetRect(selectedFrame, -PNClipBorderWidth, -PNClipBorderWidth);
+        if (!NSEqualRects(window.frame, trackedFrame)) [window setFrame:trackedFrame display:YES];
     }
 }
 
@@ -633,6 +704,28 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     [window makeKeyAndOrderFront:nil];
 }
 
+- (void)createWindowForSelectionTarget:(PNClipSelectionTarget *)target {
+    if (!target || target.windowID == 0 || NSIsEmptyRect(target.selectedFrame)) return;
+    [self createWindowWithFrame:NSInsetRect(target.selectedFrame,
+                                             -PNClipBorderWidth,
+                                             -PNClipBorderWidth)];
+    CaptureWindow *window = (CaptureWindow *)self.windows.lastObject;
+    window.sourceWindowID = target.windowID;
+    window.sourceWindowBounds = target.windowBounds;
+    CGFloat primaryTop = NSMaxY(NSScreen.screens.firstObject.frame);
+    CGRect selectedQuartz = CGRectMake(NSMinX(target.selectedFrame),
+                                        primaryTop - NSMaxY(target.selectedFrame),
+                                        NSWidth(target.selectedFrame),
+                                        NSHeight(target.selectedFrame));
+    window.sourceRectInWindow = CGRectMake(CGRectGetMinX(selectedQuartz) - CGRectGetMinX(target.windowBounds),
+                                            CGRectGetMinY(selectedQuartz) - CGRectGetMinY(target.windowBounds),
+                                            CGRectGetWidth(selectedQuartz),
+                                            CGRectGetHeight(selectedQuartz));
+    CaptureView *view = (CaptureView *)window.contentView;
+    view.sourceGeometryLocked = YES;
+    [window invalidateCursorRectsForView:view];
+}
+
 - (void)closeCurrentWindow:(id)sender {
     [self.selectedWindow close];
 }
@@ -668,6 +761,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
 
         SelectionView *selectionView = [[SelectionView alloc]
             initWithFrame:NSMakeRect(0, 0, NSWidth(screen.frame), NSHeight(screen.frame))];
+        __weak SelectionWindow *weakOverlayWindow = overlayWindow;
         selectionView.completion = ^(NSRect selectedFrame) {
             AppDelegate *strongSelf = weakSelf;
             [strongSelf dismissSelectionWindow];
@@ -675,14 +769,16 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
         };
         selectionView.componentCompletion = ^(NSRect componentFrame) {
             AppDelegate *strongSelf = weakSelf;
+            PNClipSelectionTarget *target = [strongSelf.elementDetector
+                selectionTargetAtScreenPoint:NSMakePoint(NSMidX(componentFrame), NSMidY(componentFrame))
+                                   belowWindow:weakOverlayWindow
+                           excludingProcessID:NSProcessInfo.processInfo.processIdentifier];
             [strongSelf dismissSelectionWindow];
-            NSRect windowFrame = NSInsetRect(componentFrame, -PNClipBorderWidth, -PNClipBorderWidth);
-            [strongSelf createWindowWithFrame:windowFrame];
+            [strongSelf createWindowForSelectionTarget:target];
         };
         selectionView.cancellation = ^{
             [weakSelf dismissSelectionWindow];
         };
-        __weak SelectionWindow *weakOverlayWindow = overlayWindow;
         selectionView.componentFrameProvider = ^NSRect(NSPoint screenPoint) {
             return [weakSelf componentFrameAtScreenPoint:screenPoint
                                              belowWindow:weakOverlayWindow];
@@ -758,7 +854,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     NSScreen *screen = targetWindow.screen ? targetWindow.screen : NSScreen.mainScreen;
     __weak AppDelegate *weakSelf = self;
 
-    [self loadContentFilterForScreen:screen completion:^(SCContentFilter *filter, NSError *error) {
+    CaptureWindow *captureWindow = (CaptureWindow *)targetWindow;
+    [self loadContentFilterForCaptureWindow:captureWindow screen:screen completion:^(SCContentFilter *filter, NSError *error) {
         AppDelegate *strongSelf = weakSelf;
         if (!strongSelf) return;
         if (error || !filter) {
@@ -770,9 +867,10 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
             return;
         }
 
-        SCStreamConfiguration *configuration = [strongSelf configurationForRect:captureRect
-                                                                         onScreen:screen
-                                                                   usesNativeScale:YES];
+        SCStreamConfiguration *configuration = [strongSelf configurationForCaptureWindow:captureWindow
+                                                                                     rect:captureRect
+                                                                                   screen:screen
+                                                                          usesNativeScale:YES];
 
         [SCScreenshotManager captureImageWithFilter:filter
                                       configuration:configuration
@@ -843,7 +941,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     __weak AppDelegate *weakSelf = self;
     __weak NSWindow *weakWindow = targetWindow;
 
-    [self loadContentFilterForScreen:screen completion:^(SCContentFilter *filter, NSError *error) {
+    CaptureWindow *captureWindow = (CaptureWindow *)targetWindow;
+    [self loadContentFilterForCaptureWindow:captureWindow screen:screen completion:^(SCContentFilter *filter, NSError *error) {
         AppDelegate *strongSelf = weakSelf;
         if (!strongSelf) return;
         if (error || !filter) {
@@ -858,9 +957,10 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
             return;
         }
 
-        SCStreamConfiguration *configuration = [strongSelf configurationForRect:recordingRect
-                                                                         onScreen:screen
-                                                                   usesNativeScale:usesNativeScale];
+        SCStreamConfiguration *configuration = [strongSelf configurationForCaptureWindow:captureWindow
+                                                                                     rect:recordingRect
+                                                                                   screen:screen
+                                                                          usesNativeScale:usesNativeScale];
         configuration.minimumFrameInterval = CMTimeMake(1, (int32_t)PNClipRecordingFramesPerSecond);
         configuration.queueDepth = 8;
         configuration.pixelFormat = kCVPixelFormatType_32BGRA;
@@ -930,7 +1030,8 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     __weak AppDelegate *weakSelf = self;
     __weak NSWindow *weakWindow = targetWindow;
 
-    [self loadContentFilterForScreen:screen completion:^(SCContentFilter *filter, NSError *error) {
+    CaptureWindow *captureWindow = (CaptureWindow *)targetWindow;
+    [self loadContentFilterForCaptureWindow:captureWindow screen:screen completion:^(SCContentFilter *filter, NSError *error) {
         AppDelegate *strongSelf = weakSelf;
         if (!strongSelf || strongSelf.rollingRecorders[windowKey] != recorder) return;
         if (error || !filter) {
@@ -945,9 +1046,10 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
             });
             return;
         }
-        SCStreamConfiguration *configuration = [strongSelf configurationForRect:recordingRect
-                                                                         onScreen:screen
-                                                                   usesNativeScale:usesNativeScale];
+        SCStreamConfiguration *configuration = [strongSelf configurationForCaptureWindow:captureWindow
+                                                                                     rect:recordingRect
+                                                                                   screen:screen
+                                                                          usesNativeScale:usesNativeScale];
         configuration.minimumFrameInterval = CMTimeMake(1, (int32_t)PNClipRecordingFramesPerSecond);
         configuration.queueDepth = 8;
         configuration.pixelFormat = kCVPixelFormatType_32BGRA;

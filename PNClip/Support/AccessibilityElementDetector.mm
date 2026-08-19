@@ -1,6 +1,9 @@
 #import "AccessibilityElementDetector.h"
 #import <ApplicationServices/ApplicationServices.h>
 
+@implementation PNClipSelectionTarget
+@end
+
 static BOOL CopyElementFrame(AXUIElementRef element, CGRect *frame) {
     CFTypeRef frameValue = nullptr;
     if (AXUIElementCopyAttributeValue(element, CFSTR("AXFrame"), &frameValue) == kAXErrorSuccess &&
@@ -29,16 +32,17 @@ static BOOL CopyElementFrame(AXUIElementRef element, CGRect *frame) {
 }
 
 @implementation AccessibilityElementDetector
-- (NSRect)componentFrameAtScreenPoint:(NSPoint)screenPoint
-                          belowWindow:(NSWindow *)overlayWindow
-                  excludingProcessID:(pid_t)excludedProcessID {
-    if (!overlayWindow) return NSZeroRect;
+- (PNClipSelectionTarget *)selectionTargetAtScreenPoint:(NSPoint)screenPoint
+                                             belowWindow:(NSWindow *)overlayWindow
+                                     excludingProcessID:(pid_t)excludedProcessID {
+    if (!overlayWindow) return nil;
     CGFloat primaryTop = NSMaxY(NSScreen.screens.firstObject.frame);
     CGPoint quartzPoint = CGPointMake(screenPoint.x, primaryTop - screenPoint.y);
     CFArrayRef infoRef = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenBelowWindow,
                                                     (CGWindowID)overlayWindow.windowNumber);
     NSArray *windowInfo = CFBridgingRelease(infoRef);
     pid_t targetPID = 0;
+    CGWindowID targetWindowID = 0;
     CGRect targetWindowFrame = CGRectZero;
     for (NSDictionary *info in windowInfo) {
         if ([info[(id)kCGWindowLayer] integerValue] != 0) continue;
@@ -49,11 +53,12 @@ static BOOL CopyElementFrame(AXUIElementRef element, CGRect *frame) {
                 (__bridge CFDictionaryRef)info[(id)kCGWindowBounds], &bounds)) continue;
         if (CGRectContainsPoint(bounds, quartzPoint)) {
             targetPID = ownerPID;
+            targetWindowID = [info[(id)kCGWindowNumber] unsignedIntValue];
             targetWindowFrame = bounds;
             break;
         }
     }
-    if (targetPID == 0) return NSZeroRect;
+    if (targetPID == 0) return nil;
 
     CGRect componentFrame = CGRectZero;
     AXUIElementRef application = AXUIElementCreateApplication(targetPID);
@@ -68,8 +73,20 @@ static BOOL CopyElementFrame(AXUIElementRef element, CGRect *frame) {
     if (CGRectIsEmpty(componentFrame) || !CGRectContainsPoint(componentFrame, quartzPoint)) {
         componentFrame = targetWindowFrame;
     }
-    return NSMakeRect(CGRectGetMinX(componentFrame),
-                      primaryTop - CGRectGetMaxY(componentFrame),
-                      CGRectGetWidth(componentFrame), CGRectGetHeight(componentFrame));
+    PNClipSelectionTarget *target = [[PNClipSelectionTarget alloc] init];
+    target.windowID = targetWindowID;
+    target.windowBounds = targetWindowFrame;
+    target.selectedFrame = NSMakeRect(CGRectGetMinX(componentFrame),
+                                      primaryTop - CGRectGetMaxY(componentFrame),
+                                      CGRectGetWidth(componentFrame), CGRectGetHeight(componentFrame));
+    return target;
+}
+
+- (NSRect)componentFrameAtScreenPoint:(NSPoint)screenPoint
+                          belowWindow:(NSWindow *)overlayWindow
+                  excludingProcessID:(pid_t)excludedProcessID {
+    return [self selectionTargetAtScreenPoint:screenPoint
+                                  belowWindow:overlayWindow
+                          excludingProcessID:excludedProcessID].selectedFrame;
 }
 @end

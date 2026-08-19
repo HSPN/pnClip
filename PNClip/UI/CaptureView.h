@@ -5,4 +5,5 @@
 @property(nonatomic, getter=isRecordingActive) BOOL recordingActive;
 @property(nonatomic, getter=isRollingRecordingActive) BOOL rollingRecordingActive;
 @property(nonatomic, getter=isCaptureFlashActive) BOOL captureFlashActive;
+@property(nonatomic, getter=isSourceGeometryLocked) BOOL sourceGeometryLocked;
 @end

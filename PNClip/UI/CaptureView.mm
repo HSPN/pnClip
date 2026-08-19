@@ -60,7 +60,7 @@ static NSCursor *CursorForResizeEdge(ResizeEdge edge) {
 - (BOOL)isOpaque { return NO; }
 
 - (BOOL)isWindowGeometryLocked {
-    return self.isRecordingActive || self.isRollingRecordingActive;
+    return self.isSourceGeometryLocked || self.isRecordingActive || self.isRollingRecordingActive;
 }
 
 - (void)recordingStateDidChange {
