@@ -351,22 +351,33 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
                                                          usesNativeScale:usesNativeScale];
     if (window.sourceWindowID != 0) {
         CGRect crop = window.sourceRectInWindow;
+        configuration.sourceRect = CGRectZero;
         if (!CGRectIsEmpty(crop)) {
-            configuration.sourceRect = CGRectMake(CGRectGetMinX(window.sourceWindowBounds) + CGRectGetMinX(crop),
-                                                   CGRectGetMinY(window.sourceWindowBounds) + CGRectGetMinY(crop),
-                                                   CGRectGetWidth(crop), CGRectGetHeight(crop));
-        } else {
-            configuration.sourceRect = CGRectZero;
+            CGFloat scale = usesNativeScale ? screen.backingScaleFactor : 1.0;
+            configuration.width = (size_t)round(CGRectGetWidth(window.sourceWindowBounds) * scale);
+            configuration.height = (size_t)round(CGRectGetHeight(window.sourceWindowBounds) * scale);
         }
         configuration.backgroundColor = NSColor.clearColor.CGColor;
         if (@available(macOS 14.2, *)) configuration.includeChildWindows = YES;
         if (@available(macOS 14.0, *)) {
-            configuration.ignoreShadowsSingleWindow = NO;
+            configuration.ignoreShadowsSingleWindow = !CGRectIsEmpty(crop);
             configuration.ignoreGlobalClipSingleWindow = YES;
             configuration.shouldBeOpaque = NO;
         }
     }
     return configuration;
+}
+
+- (CGRect)pixelCropRectForCaptureWindow:(CaptureWindow *)window
+                                  screen:(NSScreen *)screen
+                         usesNativeScale:(BOOL)usesNativeScale {
+    CGRect crop = window.sourceRectInWindow;
+    if (window.sourceWindowID == 0 || CGRectIsEmpty(crop)) return CGRectZero;
+    CGFloat scale = usesNativeScale ? screen.backingScaleFactor : 1.0;
+    return CGRectMake(round(CGRectGetMinX(crop) * scale),
+                      round(CGRectGetMinY(crop) * scale),
+                      round(CGRectGetWidth(crop) * scale),
+                      round(CGRectGetHeight(crop) * scale));
 }
 
 - (void)stopMousePassthroughForWindow:(NSWindow *)window key:(NSNumber *)windowKey {
@@ -816,12 +827,13 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
             [strongSelf dismissSelectionWindow];
             [strongSelf createWindowWithFrame:selectedFrame];
         };
-        selectionView.componentCompletion = ^(NSRect componentFrame) {
+        selectionView.componentCompletion = ^(NSRect componentFrame, NSPoint detectionPoint) {
             AppDelegate *strongSelf = weakSelf;
             PNClipSelectionTarget *target = [strongSelf.elementDetector
-                selectionTargetAtScreenPoint:NSMakePoint(NSMidX(componentFrame), NSMidY(componentFrame))
+                selectionTargetAtScreenPoint:detectionPoint
                                    belowWindow:weakOverlayWindow
                            excludingProcessID:NSProcessInfo.processInfo.processIdentifier];
+            target.selectedFrame = componentFrame;
             [strongSelf dismissSelectionWindow];
             [strongSelf createWindowForSelectionTarget:target];
         };
@@ -921,6 +933,9 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
                                                                                      rect:captureRect
                                                                                    screen:screen
                                                                           usesNativeScale:YES];
+        CGRect pixelCropRect = [strongSelf pixelCropRectForCaptureWindow:captureWindow
+                                                                   screen:screen
+                                                          usesNativeScale:YES];
 
         [SCScreenshotManager captureImageWithFilter:filter
                                       configuration:configuration
@@ -934,7 +949,17 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
                 return;
             }
 
-            CGImageRef retainedImage = CGImageRetain(image);
+            CGImageRef retainedImage = CGRectIsEmpty(pixelCropRect)
+                ? CGImageRetain(image)
+                : CGImageCreateWithImageInRect(image, pixelCropRect);
+            if (!retainedImage) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [strongSelf showAlertWithTitle:@"캡처 실패"
+                                           message:@"선택한 뷰 영역을 잘라낼 수 없습니다."
+                                            window:targetWindow];
+                });
+                return;
+            }
             dispatch_async(dispatch_get_main_queue(), ^{
                 [strongSelf saveCapturedImage:retainedImage];
                 CGImageRelease(retainedImage);
@@ -970,13 +995,18 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     NSRect recordingRect = NSInsetRect(contentRect, PNClipBorderWidth, PNClipBorderWidth);
     NSScreen *screen = targetWindow.screen ? targetWindow.screen : NSScreen.mainScreen;
     BOOL usesNativeScale = self.recordingUsesNativeScale;
+    CaptureWindow *captureWindow = (CaptureWindow *)targetWindow;
+    CGRect pixelCropRect = [self pixelCropRectForCaptureWindow:captureWindow
+                                                        screen:screen
+                                               usesNativeScale:usesNativeScale];
 
     CaptureRecorder *recorder = [[CaptureRecorder alloc]
         initWithWindowID:windowKey.unsignedIntValue
        destinationFolder:self.saveDirectoryURL
           maximumDuration:self.recordingDuration
             filenamePrefix:self.filenamePrefix
-              captureFormat:self.captureFormat];
+              captureFormat:self.captureFormat
+                   cropRect:pixelCropRect];
     self.recorders[windowKey] = recorder;
     if (self.recordingMouseInputEnabled) {
         if (![self installRecordingShortcutTapForWindow:targetWindow]) {
@@ -991,7 +1021,6 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     __weak AppDelegate *weakSelf = self;
     __weak NSWindow *weakWindow = targetWindow;
 
-    CaptureWindow *captureWindow = (CaptureWindow *)targetWindow;
     [self loadContentFilterForCaptureWindow:captureWindow screen:screen completion:^(SCContentFilter *filter, NSError *error) {
         AppDelegate *strongSelf = weakSelf;
         if (!strongSelf) return;
@@ -1069,10 +1098,15 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     NSRect recordingRect = NSInsetRect(contentRect, PNClipBorderWidth, PNClipBorderWidth);
     NSScreen *screen = targetWindow.screen ?: NSScreen.mainScreen;
     BOOL usesNativeScale = self.recordingUsesNativeScale;
+    CaptureWindow *captureWindow = (CaptureWindow *)targetWindow;
+    CGRect pixelCropRect = [self pixelCropRectForCaptureWindow:captureWindow
+                                                        screen:screen
+                                               usesNativeScale:usesNativeScale];
     RollingCaptureRecorder *recorder = [[RollingCaptureRecorder alloc]
         initWithDestinationFolder:self.saveDirectoryURL
                    filenamePrefix:self.filenamePrefix
-                     captureFormat:self.captureFormat];
+                     captureFormat:self.captureFormat
+                          cropRect:pixelCropRect];
     self.rollingRecorders[windowKey] = recorder;
     view.rollingRecordingActive = YES;
     self.rollingRecordingItem.state = NSControlStateValueOn;
@@ -1080,7 +1114,6 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     __weak AppDelegate *weakSelf = self;
     __weak NSWindow *weakWindow = targetWindow;
 
-    CaptureWindow *captureWindow = (CaptureWindow *)targetWindow;
     [self loadContentFilterForCaptureWindow:captureWindow screen:screen completion:^(SCContentFilter *filter, NSError *error) {
         AppDelegate *strongSelf = weakSelf;
         if (!strongSelf || strongSelf.rollingRecorders[windowKey] != recorder) return;

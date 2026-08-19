@@ -9,7 +9,8 @@
                 destinationFolder:(NSURL *)destinationFolder
                    maximumDuration:(NSTimeInterval)maximumDuration
                      filenamePrefix:(NSString *)filenamePrefix
-                       captureFormat:(PNClipCaptureFormat)captureFormat;
+                       captureFormat:(PNClipCaptureFormat)captureFormat
+                            cropRect:(CGRect)cropRect;
 - (void)startWithFilter:(SCContentFilter *)filter
           configuration:(SCStreamConfiguration *)configuration
             stopHandler:(void (^)(void))stopHandler

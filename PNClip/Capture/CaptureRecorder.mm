@@ -19,13 +19,15 @@
     NSTimeInterval _maximumDuration;
     NSString *_filenamePrefix;
     PNClipCaptureFormat _captureFormat;
+    CGRect _cropRect;
 }
 
 - (instancetype)initWithWindowID:(CGWindowID)windowID
                 destinationFolder:(NSURL *)folder
                    maximumDuration:(NSTimeInterval)maximumDuration
                      filenamePrefix:(NSString *)filenamePrefix
-                       captureFormat:(PNClipCaptureFormat)captureFormat {
+                       captureFormat:(PNClipCaptureFormat)captureFormat
+                            cropRect:(CGRect)cropRect {
     self = [super init];
     if (self) {
         _windowID = windowID;
@@ -37,6 +39,7 @@
         _maximumDuration = maximumDuration;
         _filenamePrefix = [filenamePrefix copy];
         _captureFormat = captureFormat;
+        _cropRect = cropRect;
     }
     return self;
 }
@@ -117,6 +120,11 @@
     if (!pixelBuffer) return;
     CIImage *image = [CIImage imageWithCVPixelBuffer:pixelBuffer];
     CGImageRef frame = [_ciContext createCGImage:image fromRect:image.extent];
+    if (frame && !CGRectIsEmpty(_cropRect)) {
+        CGImageRef cropped = CGImageCreateWithImageInRect(frame, _cropRect);
+        CGImageRelease(frame);
+        frame = cropped;
+    }
     if (frame) [_frames addObject:CFBridgingRelease(frame)];
 }
 

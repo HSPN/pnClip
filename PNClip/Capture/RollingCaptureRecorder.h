@@ -6,7 +6,8 @@
 @property(nonatomic, copy) NSString *filenamePrefix;
 - (instancetype)initWithDestinationFolder:(NSURL *)destinationFolder
                             filenamePrefix:(NSString *)filenamePrefix
-                              captureFormat:(PNClipCaptureFormat)captureFormat;
+                              captureFormat:(PNClipCaptureFormat)captureFormat
+                                   cropRect:(CGRect)cropRect;
 - (void)startWithFilter:(SCContentFilter *)filter
           configuration:(SCStreamConfiguration *)configuration
              completion:(void (^)(NSError *error))completion;

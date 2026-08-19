@@ -6,6 +6,7 @@
     NSPoint _dragCurrent;
     BOOL _dragging;
     NSRect _highlightedScreenRect;
+    NSPoint _highlightedScreenPoint;
     NSTrackingArea *_trackingArea;
 }
 
@@ -56,7 +57,8 @@
 - (void)updateHighlightForEvent:(NSEvent *)event {
     if (!self.componentFrameProvider) return;
     NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
-    _highlightedScreenRect = self.componentFrameProvider([self.window convertPointToScreen:point]);
+    _highlightedScreenPoint = [self.window convertPointToScreen:point];
+    _highlightedScreenRect = self.componentFrameProvider(_highlightedScreenPoint);
     [self setNeedsDisplay:YES];
 }
 
@@ -85,7 +87,7 @@
     NSRect selection = PNClipRectBetweenPoints(_dragStart, _dragCurrent);
     if (NSWidth(selection) < 20.0 || NSHeight(selection) < 20.0) {
         if (!NSIsEmptyRect(_highlightedScreenRect) && self.componentCompletion) {
-            self.componentCompletion(_highlightedScreenRect);
+            self.componentCompletion(_highlightedScreenRect, _highlightedScreenPoint);
         } else if (self.cancellation) {
             self.cancellation();
         }

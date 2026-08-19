@@ -23,6 +23,7 @@ static const NSTimeInterval kRollingDuration = 10.0;
     NSURL *_destinationFolder;
     NSString *_filenamePrefix;
     PNClipCaptureFormat _captureFormat;
+    CGRect _cropRect;
     BOOL _capturing;
     BOOL _stopping;
     NSTimeInterval _latestSampleTime;
@@ -31,12 +32,14 @@ static const NSTimeInterval kRollingDuration = 10.0;
 
 - (instancetype)initWithDestinationFolder:(NSURL *)destinationFolder
                             filenamePrefix:(NSString *)filenamePrefix
-                              captureFormat:(PNClipCaptureFormat)captureFormat {
+                              captureFormat:(PNClipCaptureFormat)captureFormat
+                                   cropRect:(CGRect)cropRect {
     self = [super init];
     if (self) {
         _destinationFolder = destinationFolder;
         _filenamePrefix = [filenamePrefix copy];
         _captureFormat = captureFormat;
+        _cropRect = cropRect;
         _ciContext = [CIContext contextWithOptions:nil];
         _frames = [NSMutableArray array];
         _captureQueue = dispatch_queue_create("com.example.PNClip.rolling-capture", DISPATCH_QUEUE_SERIAL);
@@ -102,6 +105,11 @@ static const NSTimeInterval kRollingDuration = 10.0;
         if (pixelBuffer) {
             CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
             CGImageRef image = [_ciContext createCGImage:ciImage fromRect:ciImage.extent];
+            if (image && !CGRectIsEmpty(_cropRect)) {
+                CGImageRef cropped = CGImageCreateWithImageInRect(image, _cropRect);
+                CGImageRelease(image);
+                image = cropped;
+            }
             if (image) {
                 RollingFrame *frame = [[RollingFrame alloc] init];
                 frame.image = CFBridgingRelease(image);
