@@ -4,6 +4,8 @@
 @property(nonatomic) CGWindowID windowID;
 @property(nonatomic) NSRect selectedFrame;
 @property(nonatomic) CGRect windowBounds;
+@property(nonatomic) pid_t processID;
+@property(nonatomic, strong) id accessibilityWindow;
 @end
 
 @interface AccessibilityElementDetector : NSObject

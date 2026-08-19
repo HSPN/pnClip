@@ -5,6 +5,7 @@
 
 @class AccessibilityElementDetector;
 @class RollingCaptureRecorder;
+@class SourceWindowObserver;
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property(nonatomic, strong) NSMutableArray<NSWindow *> *windows;
@@ -15,6 +16,7 @@
 @property(nonatomic, strong) NSMutableArray<SelectionWindow *> *selectionWindows;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, CaptureRecorder *> *recorders;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, RollingCaptureRecorder *> *rollingRecorders;
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, SourceWindowObserver *> *sourceWindowObservers;
 @property(nonatomic, strong) NSMutableSet<NSNumber *> *mousePassthroughWindowIDs;
 @property(nonatomic, strong) NSNumber *globalRecordingWindowKey;
 @property(nonatomic) CFMachPortRef recordingShortcutTap;
@@ -35,6 +37,7 @@
 @property(nonatomic, strong) id localKeyMonitor;
 @property(nonatomic, strong) NSTimer *mouseTrackingTimer;
 @property(nonatomic, strong) NSTimer *estimatedSizeTimer;
+@property(nonatomic, strong) NSTimer *sourceRecoveryTimer;
 @property(nonatomic, strong) NSURL *saveDirectoryURL;
 @property(nonatomic, strong) NSURL *lastCreatedFileURL;
 @property(nonatomic, copy) NSString *filenamePrefix;

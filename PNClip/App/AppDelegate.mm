@@ -11,6 +11,7 @@
 #import "../Capture/RollingCaptureRecorder.h"
 #import "../Support/PNClipConstants.h"
 #import "../Support/AccessibilityElementDetector.h"
+#import "../Support/SourceWindowObserver.h"
 #import "../UI/CaptureWindow.h"
 #import "../UI/CaptureView.h"
 #import "../UI/SelectionWindow.h"
@@ -49,6 +50,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     self.selectionWindows = [NSMutableArray array];
     self.recorders = [NSMutableDictionary dictionary];
     self.rollingRecorders = [NSMutableDictionary dictionary];
+    self.sourceWindowObservers = [NSMutableDictionary dictionary];
     self.mousePassthroughWindowIDs = [NSMutableSet set];
     self.recordingMouseInputEnabled = NO;
     self.recordingDuration = 5.0;
@@ -122,11 +124,15 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
                                                               repeats:YES
                                                                 block:^(NSTimer *timer) {
         (void)timer;
-        if (weakSelf.mousePassthroughWindowIDs.count > 0) {
+        if (weakSelf.mousePassthroughWindowIDs.count > 0 || [weakSelf hasSourceTrackedWindow]) {
             [weakSelf updateMousePassthrough];
         }
-        [weakSelf updateSourceTrackedWindows];
     }];
+    self.sourceRecoveryTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                               target:self
+                                                             selector:@selector(updateSourceTrackedWindows)
+                                                             userInfo:nil
+                                                              repeats:YES];
     self.estimatedSizeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
                                                               target:self
                                                             selector:@selector(updateEstimatedGIFSize:)
@@ -228,6 +234,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     if (self.localMouseMonitor) [NSEvent removeMonitor:self.localMouseMonitor];
     if (self.localKeyMonitor) [NSEvent removeMonitor:self.localKeyMonitor];
     [self.mouseTrackingTimer invalidate];
+    [self.sourceRecoveryTimer invalidate];
     [self.estimatedSizeTimer invalidate];
     [self removeRecordingShortcutTap];
     for (RollingCaptureRecorder *recorder in self.rollingRecorders.allValues) [recorder stop];
@@ -342,7 +349,23 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     SCStreamConfiguration *configuration = [self configurationForRect:rect
                                                                onScreen:screen
                                                          usesNativeScale:usesNativeScale];
-    if (window.sourceWindowID != 0) configuration.sourceRect = window.sourceRectInWindow;
+    if (window.sourceWindowID != 0) {
+        CGRect crop = window.sourceRectInWindow;
+        if (!CGRectIsEmpty(crop)) {
+            configuration.sourceRect = CGRectMake(CGRectGetMinX(window.sourceWindowBounds) + CGRectGetMinX(crop),
+                                                   CGRectGetMinY(window.sourceWindowBounds) + CGRectGetMinY(crop),
+                                                   CGRectGetWidth(crop), CGRectGetHeight(crop));
+        } else {
+            configuration.sourceRect = CGRectZero;
+        }
+        configuration.backgroundColor = NSColor.clearColor.CGColor;
+        if (@available(macOS 14.2, *)) configuration.includeChildWindows = YES;
+        if (@available(macOS 14.0, *)) {
+            configuration.ignoreShadowsSingleWindow = NO;
+            configuration.ignoreGlobalClipSingleWindow = YES;
+            configuration.shouldBeOpaque = NO;
+        }
+    }
     return configuration;
 }
 
@@ -446,7 +469,9 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     for (NSWindow *window in self.windows) {
         NSNumber *windowKey = @((CGWindowID)window.windowNumber);
         BOOL shouldPassThrough = NO;
-        if ([self.mousePassthroughWindowIDs containsObject:windowKey]) {
+        BOOL followsSourceWindow = [window isKindOfClass:CaptureWindow.class] &&
+                                   ((CaptureWindow *)window).sourceWindowID != 0;
+        if (followsSourceWindow || [self.mousePassthroughWindowIDs containsObject:windowKey]) {
             NSPoint windowPoint = [window convertPointFromScreen:mouseLocation];
             NSPoint viewPoint = [window.contentView convertPoint:windowPoint fromView:nil];
             NSRect interactionRect = NSInsetRect(window.contentView.bounds,
@@ -458,38 +483,39 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     }
 }
 
-- (void)updateSourceTrackedWindows {
-    NSMutableDictionary<NSNumber *, NSDictionary *> *sourceInfo = [NSMutableDictionary dictionary];
-    BOOL hasTrackedWindow = NO;
+- (BOOL)hasSourceTrackedWindow {
     for (CaptureWindow *window in self.windows) {
-        if ([window isKindOfClass:CaptureWindow.class] && window.sourceWindowID != 0) {
-            hasTrackedWindow = YES;
-            break;
-        }
+        if ([window isKindOfClass:CaptureWindow.class] && window.sourceWindowID != 0) return YES;
     }
-    if (!hasTrackedWindow) return;
+    return NO;
+}
 
-    NSArray<NSDictionary *> *windowInfo = CFBridgingRelease(
-        CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID));
-    for (NSDictionary *info in windowInfo) {
-        NSNumber *windowID = info[(id)kCGWindowNumber];
-        if (windowID) sourceInfo[windowID] = info;
-    }
-    CGFloat primaryTop = NSMaxY(NSScreen.screens.firstObject.frame);
+- (void)updateSourceTrackedWindows {
     for (CaptureWindow *window in self.windows) {
-        if (![window isKindOfClass:CaptureWindow.class] || window.sourceWindowID == 0) continue;
-        NSDictionary *info = sourceInfo[@(window.sourceWindowID)];
-        CGRect bounds = CGRectZero;
-        if (!info || !CGRectMakeWithDictionaryRepresentation(
-                (__bridge CFDictionaryRef)info[(id)kCGWindowBounds], &bounds)) continue;
-        window.sourceWindowBounds = bounds;
-        CGRect crop = window.sourceRectInWindow;
-        NSRect selectedFrame = NSMakeRect(CGRectGetMinX(bounds) + CGRectGetMinX(crop),
-                                          primaryTop - CGRectGetMinY(bounds) - CGRectGetMaxY(crop),
-                                          CGRectGetWidth(crop), CGRectGetHeight(crop));
-        NSRect trackedFrame = NSInsetRect(selectedFrame, -PNClipBorderWidth, -PNClipBorderWidth);
-        if (!NSEqualRects(window.frame, trackedFrame)) [window setFrame:trackedFrame display:YES];
+        if ([window isKindOfClass:CaptureWindow.class] && window.sourceWindowID != 0)
+            [self updateSourceTrackedWindow:window];
     }
+}
+
+- (void)updateSourceTrackedWindow:(CaptureWindow *)window {
+    if (!window || window.sourceWindowID == 0) return;
+    NSArray<NSDictionary *> *windowInfo = CFBridgingRelease(CGWindowListCopyWindowInfo(
+        kCGWindowListOptionIncludingWindow, window.sourceWindowID));
+    NSDictionary *info = windowInfo.firstObject;
+    CGRect bounds = CGRectZero;
+    if (!info || !CGRectMakeWithDictionaryRepresentation(
+            (__bridge CFDictionaryRef)info[(id)kCGWindowBounds], &bounds)) return;
+    CGFloat primaryTop = NSMaxY(NSScreen.screens.firstObject.frame);
+    window.sourceWindowBounds = bounds;
+    CGRect crop = window.sourceRectInWindow;
+    if (CGRectIsEmpty(crop)) {
+        crop = CGRectMake(0, 0, CGRectGetWidth(bounds), CGRectGetHeight(bounds));
+    }
+    NSRect selectedFrame = NSMakeRect(CGRectGetMinX(bounds) + CGRectGetMinX(crop),
+                                      primaryTop - CGRectGetMinY(bounds) - CGRectGetMaxY(crop),
+                                      CGRectGetWidth(crop), CGRectGetHeight(crop));
+    NSRect trackedFrame = NSInsetRect(selectedFrame, -PNClipBorderWidth, -PNClipBorderWidth);
+    if (!NSEqualRects(window.frame, trackedFrame)) [window setFrame:trackedFrame display:YES];
 }
 
 - (NSRect)componentFrameAtScreenPoint:(NSPoint)screenPoint
@@ -717,13 +743,36 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
                                         primaryTop - NSMaxY(target.selectedFrame),
                                         NSWidth(target.selectedFrame),
                                         NSHeight(target.selectedFrame));
-    window.sourceRectInWindow = CGRectMake(CGRectGetMinX(selectedQuartz) - CGRectGetMinX(target.windowBounds),
-                                            CGRectGetMinY(selectedQuartz) - CGRectGetMinY(target.windowBounds),
-                                            CGRectGetWidth(selectedQuartz),
-                                            CGRectGetHeight(selectedQuartz));
+    CGRect crop = CGRectMake(CGRectGetMinX(selectedQuartz) - CGRectGetMinX(target.windowBounds),
+                             CGRectGetMinY(selectedQuartz) - CGRectGetMinY(target.windowBounds),
+                             CGRectGetWidth(selectedQuartz), CGRectGetHeight(selectedQuartz));
+    BOOL selectsWholeWindow = fabs(CGRectGetMinX(crop)) < 1.0 &&
+                              fabs(CGRectGetMinY(crop)) < 1.0 &&
+                              fabs(CGRectGetWidth(crop) - CGRectGetWidth(target.windowBounds)) < 1.0 &&
+                              fabs(CGRectGetHeight(crop) - CGRectGetHeight(target.windowBounds)) < 1.0;
+    window.sourceRectInWindow = selectsWholeWindow ? CGRectZero : crop;
     CaptureView *view = (CaptureView *)window.contentView;
     view.sourceGeometryLocked = YES;
     [window invalidateCursorRectsForView:view];
+    if (target.accessibilityWindow) {
+        NSNumber *windowKey = @((CGWindowID)window.windowNumber);
+        __weak AppDelegate *weakSelf = self;
+        __weak CaptureWindow *weakWindow = window;
+        SourceWindowObserver *observer = [[SourceWindowObserver alloc]
+            initWithProcessID:target.processID
+                       window:(__bridge AXUIElementRef)target.accessibilityWindow
+                      handler:^(CFStringRef notification) {
+            AppDelegate *strongSelf = weakSelf;
+            CaptureWindow *strongWindow = weakWindow;
+            if (!strongSelf || !strongWindow) return;
+            if (CFEqual(notification, kAXUIElementDestroyedNotification)) {
+                [strongWindow close];
+                return;
+            }
+            [strongSelf updateSourceTrackedWindow:strongWindow];
+        }];
+        if (observer.isActive) self.sourceWindowObservers[windowKey] = observer;
+    }
 }
 
 - (void)closeCurrentWindow:(id)sender {
@@ -834,6 +883,7 @@ static CGEventRef RecordingShortcutCallback(CGEventTapProxy proxy,
     [self.recorders[windowKey] stop];
     [self.rollingRecorders[windowKey] stop];
     [self.rollingRecorders removeObjectForKey:windowKey];
+    [self.sourceWindowObservers removeObjectForKey:windowKey];
     if (self.selectedWindow == notification.object) {
         self.selectedWindow = nil;
     }

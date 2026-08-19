@@ -63,10 +63,18 @@ static BOOL CopyElementFrame(AXUIElementRef element, CGRect *frame) {
     CGRect componentFrame = CGRectZero;
     AXUIElementRef application = AXUIElementCreateApplication(targetPID);
     AXUIElementRef element = nullptr;
+    AXUIElementRef accessibilityWindow = nullptr;
     AXError error = AXUIElementCopyElementAtPosition(application, quartzPoint.x,
                                                       quartzPoint.y, &element);
     if (error == kAXErrorSuccess && element) {
         CopyElementFrame(element, &componentFrame);
+        CFTypeRef windowValue = nullptr;
+        if (AXUIElementCopyAttributeValue(element, kAXWindowAttribute, &windowValue) == kAXErrorSuccess &&
+            windowValue && CFGetTypeID(windowValue) == AXUIElementGetTypeID()) {
+            accessibilityWindow = (AXUIElementRef)windowValue;
+        } else if (windowValue) {
+            CFRelease(windowValue);
+        }
         CFRelease(element);
     }
     CFRelease(application);
@@ -76,6 +84,8 @@ static BOOL CopyElementFrame(AXUIElementRef element, CGRect *frame) {
     PNClipSelectionTarget *target = [[PNClipSelectionTarget alloc] init];
     target.windowID = targetWindowID;
     target.windowBounds = targetWindowFrame;
+    target.processID = targetPID;
+    target.accessibilityWindow = CFBridgingRelease(accessibilityWindow);
     target.selectedFrame = NSMakeRect(CGRectGetMinX(componentFrame),
                                       primaryTop - CGRectGetMaxY(componentFrame),
                                       CGRectGetWidth(componentFrame), CGRectGetHeight(componentFrame));
