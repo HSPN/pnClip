@@ -104,6 +104,50 @@ ad-hoc 서명은 앱 실행에는 충분하지만 Mac마다 별도의 화면 기
 
 Xcode에서는 `PNClip.xcodeproj`를 열고 Run을 누르면 됩니다.
 
+## 플랫폼 소스 구조
+
+플랫폼 공통 로직은 `PNClip/Core`의 표준 C++20 코드에 둡니다. 플랫폼 API를
+사용하는 구현은 전처리기 분기 없이 별도 파일로 나뉩니다.
+
+플랫폼 어댑터가 따라야 할 좌표계, 캡처 세션 수명 및 콜백 규칙은
+`PNClip/Core/PLATFORM_CONTRACT.md`에 고정되어 있습니다. Windows 구현은 이 계약을
+소비하며 `PNClip/Core`를 수정하지 않고 `*Win.cpp`와 Windows UI 파일만 채우도록
+구성되어 있습니다.
+
+GIF 컨테이너/LZW와 WebP 인코딩도 공통 코어가 담당합니다. macOS 어댑터는
+`CGImage`를 공통 `PixelBuffer`로 변환한 뒤 동일한 인코더를 호출합니다.
+
+- macOS 구현: 파일명에 `Mac` 접미사 (`*Mac.mm`, `*Mac.h`)
+- Windows 구현: 파일명에 `Win` 접미사 (`*Win.cpp`, `*Win.hpp`)
+- 공통 구현: 플랫폼 접미사 없는 `.cpp`와 `.hpp`
+
+Makefile은 macOS에서 공통 `.cpp`와 `*Mac.mm`만 링크합니다. Windows 빌드는
+Make의 `windows` 대상이 CMake를 호출하고, CMake는 공통 `.cpp`와 `*Win.cpp`만
+대상에 포함합니다. 따라서 공통 소스에는 `#ifdef _WIN32`나 Apple 플랫폼 분기가
+들어가지 않습니다.
+
+서명 없이 macOS 컴파일 결과만 확인하려면 다음을 사용합니다.
+
+```sh
+make build
+```
+
+공통 C++ 코어, GIF, WebP 테스트를 모두 실행하려면 다음을 사용합니다.
+
+```sh
+make test
+```
+
+Windows에서는 Visual Studio Build Tools, 최신 Windows SDK 및 CMake가 준비된
+개발자 명령 프롬프트에서 다음을 사용합니다. 현재 이 대상은 공통 코어와
+모든 Windows 플랫폼 어댑터의 계약 완전성을 빌드합니다. 어댑터 팩토리는 이미
+링크 가능하며, 현재 빈 구현의 본문과 Windows App SDK 기반 UI 셸을 Windows에서
+구현하는 작업만 남아 있습니다.
+
+```sh
+make windows
+```
+
 자체 GIF 인코더의 생성 및 ImageIO 재디코딩 테스트는 다음으로 실행할 수 있습니다.
 
 ```sh

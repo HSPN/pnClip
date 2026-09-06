@@ -1,7 +1,7 @@
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
-#import "../PNClip/Formats/GIF/GIFEncoder.h"
+#import "../PNClip/Formats/GIF/GIFEncoderMac.h"
 
 static CGImageRef MakeTestFrame(size_t width, size_t height, NSUInteger phase) {
     NSMutableData *pixels = [NSMutableData dataWithLength:width * height * 4];

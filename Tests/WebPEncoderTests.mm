@@ -1,6 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
-#import "../PNClip/Formats/WebP/WebPEncoder.h"
+#import "../PNClip/Formats/WebP/WebPEncoderMac.h"
 
 static CGImageRef SolidImage(size_t width, size_t height, CGFloat red,
                              CGFloat green, CGFloat blue) {
