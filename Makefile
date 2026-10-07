@@ -16,7 +16,7 @@ all: sign
 
 build: $(EXECUTABLE)
 
-$(EXECUTABLE): $(SOURCES) PNClip/Info.plist PNClip/AppIcon.icns
+$(EXECUTABLE): $(SOURCES) $(wildcard PNClip/Core/*.hpp) PNClip/Info.plist PNClip/AppIcon.icns
 	mkdir -p $(APP)/Contents/MacOS
 	mkdir -p $(APP)/Contents/Resources
 	cp PNClip/Info.plist $(APP)/Contents/Info.plist
@@ -38,7 +38,7 @@ test-core:
 	/tmp/pnclip-core-tests
 
 test-platform-contract:
-	clang++ -std=c++20 -fsyntax-only PNClip/Capture/CaptureBackendWin.cpp PNClip/Support/PlatformServicesWin.cpp
+	clang++ -std=c++20 -fsyntax-only Tests/PlatformContractTests.cpp
 
 test-gif:
 	clang++ -std=c++20 -fobjc-arc -framework AppKit -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers Tests/GIFEncoderTests.mm PNClip/Formats/GIF/GIFEncoderMac.mm PNClip/Core/GifEncoder.cpp PNClip/Core/GifLzwEncoder.cpp PNClip/Core/CaptureTypes.cpp -o /tmp/pnclip-gif-encoder-tests

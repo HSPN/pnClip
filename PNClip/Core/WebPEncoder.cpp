@@ -38,7 +38,8 @@ EncodeResult WebPEncoder::encode(std::span<const PixelBuffer> frames,
     if (success) success = WebPAnimEncoderAdd(encoder, nullptr, timestamp, nullptr);
     WebPData output; WebPDataInit(&output);
     if (success) success = WebPAnimEncoderAssemble(encoder, &output);
-    std::string message = success ? "" : (WebPAnimEncoderGetError(encoder) ?: "Encoding failed");
+    const char* encoderError = success ? nullptr : WebPAnimEncoderGetError(encoder);
+    std::string message = success ? "" : (encoderError ? encoderError : "Encoding failed");
     WebPAnimEncoderDelete(encoder);
     if (!success) { WebPDataClear(&output); return {{}, {7, std::move(message)}}; }
     std::vector<std::byte> data(output.size);

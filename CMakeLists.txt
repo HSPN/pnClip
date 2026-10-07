@@ -1,46 +1,83 @@
 cmake_minimum_required(VERSION 3.24)
-project(PNClip LANGUAGES CXX)
-
+project(PNClip LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
-find_path(WEBP_INCLUDE_DIR webp/encode.h HINTS ThirdParty/libwebp/include REQUIRED)
-find_library(WEBP_LIBRARY NAMES webp libwebp HINTS ThirdParty/libwebp/lib REQUIRED)
-find_library(WEBPMUX_LIBRARY NAMES webpmux libwebpmux HINTS ThirdParty/libwebp/lib REQUIRED)
-find_library(SHARPYUV_LIBRARY NAMES sharpyuv libsharpyuv HINTS ThirdParty/libwebp/lib REQUIRED)
-
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+if(WIN32)
+    include(FetchContent)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(WEBP_BUILD_ANIM_UTILS OFF CACHE BOOL "" FORCE)
+    set(WEBP_BUILD_CWEBP OFF CACHE BOOL "" FORCE)
+    set(WEBP_BUILD_DWEBP OFF CACHE BOOL "" FORCE)
+    set(WEBP_BUILD_GIF2WEBP OFF CACHE BOOL "" FORCE)
+    set(WEBP_BUILD_IMG2WEBP OFF CACHE BOOL "" FORCE)
+    set(WEBP_BUILD_VWEBP OFF CACHE BOOL "" FORCE)
+    set(WEBP_BUILD_WEBPINFO OFF CACHE BOOL "" FORCE)
+    set(WEBP_BUILD_WEBPMUX OFF CACHE BOOL "" FORCE)
+    set(WEBP_BUILD_EXTRAS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(webp URL "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/libwebp/libwebp-1.6.0.tar.gz"
+        URL_HASH SHA256=e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(webp)
+    set(WEBP_INCLUDE_DIR "${webp_SOURCE_DIR}/src")
+    set(WEBP_LIBRARIES libwebpmux webp sharpyuv)
+else()
+    find_path(WEBP_INCLUDE_DIR webp/encode.h HINTS ThirdParty/libwebp/include REQUIRED)
+    find_library(WEBP_LIBRARY NAMES webp libwebp HINTS ThirdParty/libwebp/lib REQUIRED)
+    find_library(WEBPMUX_LIBRARY NAMES webpmux libwebpmux HINTS ThirdParty/libwebp/lib REQUIRED)
+    find_library(SHARPYUV_LIBRARY NAMES sharpyuv libsharpyuv HINTS ThirdParty/libwebp/lib REQUIRED)
+    set(WEBP_LIBRARIES ${WEBPMUX_LIBRARY} ${WEBP_LIBRARY} ${SHARPYUV_LIBRARY})
+endif()
 add_library(PNClipCore STATIC
-    PNClip/Core/AppController.cpp
-    PNClip/Core/CaptureTypes.cpp
-    PNClip/Core/GifEncoder.cpp
-    PNClip/Core/GifLzwEncoder.cpp
-    PNClip/Core/ImageEncoder.cpp
-    PNClip/Core/RollingFrameBuffer.cpp
-    PNClip/Core/WebPEncoder.cpp
-)
-target_include_directories(PNClipCore PUBLIC PNClip/Core)
-target_include_directories(PNClipCore PRIVATE ${WEBP_INCLUDE_DIR})
-target_link_libraries(PNClipCore PUBLIC ${WEBPMUX_LIBRARY} ${WEBP_LIBRARY} ${SHARPYUV_LIBRARY})
-
-add_executable(PNClipCoreTests Tests/CoreTests.cpp)
-target_link_libraries(PNClipCoreTests PRIVATE PNClipCore)
-
+    PNClip/Core/AppController.cpp PNClip/Core/CaptureTypes.cpp
+    PNClip/Core/GifEncoder.cpp PNClip/Core/GifLzwEncoder.cpp
+    PNClip/Core/ImageEncoder.cpp PNClip/Core/RollingFrameBuffer.cpp PNClip/Core/WebPEncoder.cpp)
+target_include_directories(PNClipCore PUBLIC PNClip/Core PRIVATE ${WEBP_INCLUDE_DIR})
+target_link_libraries(PNClipCore PUBLIC ${WEBP_LIBRARIES})
+if(MSVC)
+    target_compile_options(PNClipCore PRIVATE /utf-8 /W4)
+endif()
 include(CTest)
-add_test(NAME PNClipCoreTests COMMAND PNClipCoreTests)
-
-option(PNCLIP_BUILD_WINDOWS "Build Windows platform adapters" ${WIN32})
+if(BUILD_TESTING)
+    add_executable(PNClipCoreTests Tests/CoreTests.cpp)
+    target_link_libraries(PNClipCoreTests PRIVATE PNClipCore)
+    if(MSVC)
+        target_compile_options(PNClipCoreTests PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(PNClipCoreTests PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME PNClipCoreTests COMMAND PNClipCoreTests)
+endif()
+option(PNCLIP_BUILD_WINDOWS "Build Windows application and adapters" ${WIN32})
 if(PNCLIP_BUILD_WINDOWS)
     if(NOT WIN32)
-        message(FATAL_ERROR "Windows adapters require a Windows SDK and must be built on Windows")
+        message(FATAL_ERROR "Windows adapters require Windows and a Windows SDK")
     endif()
-
     add_library(PNClipPlatformWin STATIC
         PNClip/Capture/CaptureBackendWin.cpp
         PNClip/Support/PlatformCapabilitiesWin.cpp
         PNClip/Support/PlatformServicesWin.cpp
-    )
-    target_include_directories(PNClipPlatformWin PUBLIC PNClip/Core)
-    target_link_libraries(PNClipPlatformWin PUBLIC PNClipCore windowsapp)
-    target_compile_definitions(PNClipPlatformWin PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+        PNClip/Support/ImageFilesWin.cpp)
+    target_include_directories(PNClipPlatformWin PUBLIC PNClip/Core PNClip/Support)
+    target_link_libraries(PNClipPlatformWin PUBLIC PNClipCore windowsapp d3d11 dxgi
+        windowscodecs shcore shell32 ole32 user32 gdi32 advapi32)
+    target_compile_definitions(PNClipPlatformWin PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(PNClipPlatformWin PRIVATE /utf-8 /W4)
+    add_executable(PNClip WIN32 PNClip/mainWin.cpp PNClip/PNClipWin.rc)
+    target_link_libraries(PNClip PRIVATE PNClipPlatformWin dwmapi comctl32 uiautomationcore oleacc)
+    target_compile_options(PNClip PRIVATE /utf-8 /W4)
+    target_link_options(PNClip PRIVATE "/MANIFEST:EMBED" "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/PNClip/PNClipWin.manifest")
+    if(BUILD_TESTING)
+        add_executable(PNClipWindowsTests Tests/WindowsTests.cpp Tests/WindowsCaptureTests.cpp)
+        target_link_libraries(PNClipWindowsTests PRIVATE PNClipPlatformWin webpdemux dwmapi)
+        target_include_directories(PNClipWindowsTests PRIVATE ${WEBP_INCLUDE_DIR})
+        target_compile_options(PNClipWindowsTests PRIVATE /utf-8 /W4 /UNDEBUG)
+        add_test(NAME PNClipWindowsTests COMMAND PNClipWindowsTests)
+        add_executable(PNClipUITests Tests/WindowsUITests.cpp PNClip/PNClipWin.rc)
+        target_link_libraries(PNClipUITests PRIVATE PNClipPlatformWin dwmapi comctl32 uiautomationcore oleacc)
+        target_compile_options(PNClipUITests PRIVATE /utf-8 /W4 /UNDEBUG)
+    endif()
 endif()

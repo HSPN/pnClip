@@ -1,0 +1,3 @@
+1 ICON "AppIcon.ico"
+2 RCDATA "../ThirdParty/libwebp/COPYING"
+3 RCDATA "../ThirdParty/libwebp/PATENTS"

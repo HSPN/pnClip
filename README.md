@@ -1,7 +1,11 @@
 # PNClip
 
-AppKit과 Objective-C++로 만든 macOS 영역 캡처 앱입니다. 투명한 PNClip 창으로
+macOS와 Windows용 영역 캡처 앱입니다. 투명한 PNClip 창으로
 영역을 직접 지정하거나 다른 앱의 창을 선택하여 PNG/GIF 또는 WebP로 캡처합니다.
+
+**Windows:** [윈도우 실행·빌드 안내](WINDOWS.md)를 참고하세요.
+`./Scripts/build-windows.ps1 -Run`으로 빌드하고 실행할 수 있습니다.
+아래 조작법과 `⌘` 단축키는 macOS 기준입니다.
 
 ## 조작법
 
@@ -138,14 +142,12 @@ make build
 make test
 ```
 
-Windows에서는 Visual Studio Build Tools, 최신 Windows SDK 및 CMake가 준비된
-개발자 명령 프롬프트에서 다음을 사용합니다. 현재 이 대상은 공통 코어와
-모든 Windows 플랫폼 어댑터의 계약 완전성을 빌드합니다. 어댑터 팩토리는 이미
-링크 가능하며, 현재 빈 구현의 본문과 Windows App SDK 기반 UI 셸을 Windows에서
-구현하는 작업만 남아 있습니다.
+Windows에서는 Visual Studio C++ 도구, Windows SDK 및 CMake를 사용합니다.
+Win32 UI, Windows Graphics Capture 기반 캡처·녹화, 클립보드, 설정 저장을 포함한
+실행 파일을 빌드합니다. libwebp는 함께 제공하는 공식 소스에서 Windows용으로 빌드합니다.
 
 ```sh
-make windows
+./Scripts/build-windows.ps1
 ```
 
 자체 GIF 인코더의 생성 및 ImageIO 재디코딩 테스트는 다음으로 실행할 수 있습니다.

@@ -1,4 +1,5 @@
 build/
+test-output/
 DerivedData/
 *.xcuserstate
 xcuserdata/

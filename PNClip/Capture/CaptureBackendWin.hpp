@@ -2,7 +2,6 @@
 #include "../Core/PlatformServices.hpp"
 #include <memory>
 namespace pnclip {
-// The factory is link-complete now. Replace only CaptureBackendWin.cpp when the
-// Windows Graphics Capture implementation is added.
+// Windows Graphics Capture backend; owns its capture and encoding workers.
 [[nodiscard]] std::unique_ptr<CaptureBackend> makeCaptureBackendWin();
 }
